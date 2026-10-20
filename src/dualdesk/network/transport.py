@@ -5,11 +5,13 @@ import socket
 import ssl
 import struct
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from dualdesk.display.adaptive import AdaptiveRateController
 from dualdesk.display.input_injector import InputInjector
 from dualdesk.protocol.models import (
     ButtonPayload,
@@ -97,9 +99,11 @@ class ConnectionManager:
         tls_cert_path: Path | None = None,
         tls_key_path: Path | None = None,
         tls_expected_fingerprint: str | None = None,
+        adaptive_controller: AdaptiveRateController | None = None,
         on_state_changed: Callable[[ConnectionState, str], None] | None = None,
         on_telemetry_updated: Callable[[SessionTelemetry], None] | None = None,
         on_frame_received: Callable[[bytes], None] | None = None,
+        on_frame_sent: Callable[[float, int], None] | None = None,
     ) -> None:
         self.db = db
         self.pairing_manager = pairing_manager
@@ -111,10 +115,13 @@ class ConnectionManager:
         self.tls_cert_path = tls_cert_path
         self.tls_key_path = tls_key_path
         self.tls_expected_fingerprint = tls_expected_fingerprint
+        self.adaptive_controller = adaptive_controller
         self.on_state_changed = on_state_changed
         self.on_telemetry_updated = on_telemetry_updated
         self.on_frame_received = on_frame_received
+        self.on_frame_sent = on_frame_sent
 
+        self.last_send_latency_ms: float = 0.0
         self._tls_server_context: ssl.SSLContext | None = None
         self._tls_client_context: ssl.SSLContext | None = None
 
@@ -460,8 +467,15 @@ class ConnectionManager:
         if not self._media_client_sock or not frame_bytes:
             return False
         header = struct.pack(">I", len(frame_bytes))
+        send_start = time.perf_counter()
         try:
             self._media_client_sock.sendall(header + frame_bytes)
+            send_duration_ms = (time.perf_counter() - send_start) * 1000.0
+            self.last_send_latency_ms = send_duration_ms
+            if self.adaptive_controller:
+                self.adaptive_controller.record_send_latency(send_duration_ms, len(frame_bytes))
+            if self.on_frame_sent:
+                self.on_frame_sent(send_duration_ms, len(frame_bytes))
             return True
         except OSError:
             try:

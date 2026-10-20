@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from dualdesk.diagnostics.bundle import DiagnosticBundleGenerator
+from dualdesk.display.adaptive import AdaptiveRateController
 from dualdesk.display.capture import ScreenCaptureAdapter
 from dualdesk.display.driver import check_virtual_display_driver, get_supported_modes
 from dualdesk.network.discovery import DiscoveredDevice, DiscoveryBeacon, DiscoveryService
@@ -74,11 +75,13 @@ class DualDeskApp(QMainWindow):
         self.discovery = DiscoveryService(self.beacon)
         self.discovery.start()
 
+        self.adaptive_controller = AdaptiveRateController()
         self.capture_adapter = ScreenCaptureAdapter(
             width=1920,
             height=1080,
             target_fps=60,
             is_virtual_display=self.driver_status.is_installed,
+            adaptive_controller=self.adaptive_controller,
         )
 
         self._stream_window: StreamWindow | None = None
@@ -92,6 +95,7 @@ class DualDeskApp(QMainWindow):
             enable_tls=True,
             tls_cert_path=cert_path,
             tls_key_path=key_path,
+            adaptive_controller=self.adaptive_controller,
             on_state_changed=self._on_connection_state_changed,
             on_telemetry_updated=self._on_telemetry_updated,
             on_frame_received=self._on_stream_frame_received,

@@ -5,6 +5,8 @@ import platform
 import time
 from dataclasses import dataclass
 
+from dualdesk.display.adaptive import AdaptiveRateController
+
 try:
     from PySide6.QtCore import QBuffer, QIODevice
     from PySide6.QtGui import QImage
@@ -41,13 +43,15 @@ class CaptureStats:
     height: int
     is_virtual_display: bool
     source_label: str
+    quality: int = 70
+    is_congested: bool = False
 
 
 class ScreenCaptureAdapter:
     """
     Screen capture adapter that captures desktop frames via Win32 GDI,
     compresses frames into JPEG buffers, measures real FPS/latency/bitrate,
-    and distinguishes between real virtual display capture and screen preview prototype.
+    and dynamically adapts framerate and JPEG quality based on network congestion.
     """
 
     def __init__(
@@ -55,12 +59,16 @@ class ScreenCaptureAdapter:
         width: int = 1920,
         height: int = 1080,
         target_fps: int = 60,
+        quality: int = 70,
         is_virtual_display: bool = False,
+        adaptive_controller: AdaptiveRateController | None = None,
     ) -> None:
         self.width = width
         self.height = height
         self.target_fps = target_fps
+        self.quality = quality
         self.is_virtual_display = is_virtual_display
+        self.adaptive_controller = adaptive_controller
         self.is_capturing = False
 
         self._frame_count = 0
@@ -92,6 +100,10 @@ class ScreenCaptureAdapter:
         """
         Captures the next frame from the display and returns the compressed frame bytes and telemetry.
         """
+        if self.adaptive_controller:
+            self.target_fps = self.adaptive_controller.current_fps
+            self.quality = self.adaptive_controller.current_quality
+
         now = time.time()
         frame_interval = 1.0 / max(1, self.target_fps)
 
@@ -135,7 +147,7 @@ class ScreenCaptureAdapter:
                     img = QImage(raw_buf, cap_w, cap_h, cap_w * 4, QImage.Format.Format_ARGB32)
                     qbuf = QBuffer()
                     qbuf.open(QIODevice.OpenModeFlag.WriteOnly)
-                    img.save(qbuf, "JPEG", 65)
+                    img.save(qbuf, "JPEG", self.quality)
                     frame_data = bytes(qbuf.data())
                 else:
                     frame_data = bytes(raw_buf[:4096])
@@ -163,6 +175,9 @@ class ScreenCaptureAdapter:
         return frame_data, self.get_stats()
 
     def get_stats(self) -> CaptureStats:
+        is_congested = (
+            self.adaptive_controller.is_congested if self.adaptive_controller else False
+        )
         return CaptureStats(
             fps=round(self._current_fps, 1),
             latency_ms=round(self._last_latency_ms, 1),
@@ -173,4 +188,6 @@ class ScreenCaptureAdapter:
             height=self.height,
             is_virtual_display=self.is_virtual_display,
             source_label=self.source_label,
+            quality=self.quality,
+            is_congested=is_congested,
         )
