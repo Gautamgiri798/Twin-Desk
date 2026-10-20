@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import enum
 import socket
+import struct
 import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from dualdesk.display.input_injector import InputInjector
 from dualdesk.protocol.models import (
     ButtonPayload,
     ErrorCode,
@@ -21,6 +23,7 @@ from dualdesk.security.pairing import PairingManager, PairingSession
 from dualdesk.storage.db import DualDeskDB
 
 DEFAULT_CONTROL_PORT = 53892
+DEFAULT_MEDIA_PORT = 53893
 MAX_ENVELOPE_BYTES = 65536
 
 
@@ -68,7 +71,8 @@ def _recv_envelope(sock: socket.socket, timeout: float = 5.0) -> MessageEnvelope
 class ConnectionManager:
     """
     Manages peer-to-peer session state machine, authentication checks,
-    TCP control channel, message framing, input forwarding, telemetry, and graceful disconnect release.
+    TCP control channel, media streaming, host input injection, input forwarding,
+    telemetry, and graceful disconnect release.
     """
 
     RECONNECT_MAX_ATTEMPTS = 5
@@ -80,15 +84,21 @@ class ConnectionManager:
         pairing_manager: PairingManager,
         role: str = "host",
         control_port: int = DEFAULT_CONTROL_PORT,
+        media_port: int = DEFAULT_MEDIA_PORT,
+        enable_input_injection: bool = True,
         on_state_changed: Callable[[ConnectionState, str], None] | None = None,
         on_telemetry_updated: Callable[[SessionTelemetry], None] | None = None,
+        on_frame_received: Callable[[bytes], None] | None = None,
     ) -> None:
         self.db = db
         self.pairing_manager = pairing_manager
         self.role = role
         self.control_port = control_port
+        self.media_port = media_port
+        self.enable_input_injection = enable_input_injection
         self.on_state_changed = on_state_changed
         self.on_telemetry_updated = on_telemetry_updated
+        self.on_frame_received = on_frame_received
 
         self.state = ConnectionState.NOT_CONNECTED
         self.active_session_id: str | None = None
@@ -98,18 +108,27 @@ class ConnectionManager:
         self.error_message: str = ""
 
         self.input_filter: InputFilter | None = None
+        self.input_injector: InputInjector | None = (
+            InputInjector(enabled=enable_input_injection) if role == "host" else None
+        )
         self.telemetry = SessionTelemetry()
         self._history_id: int | None = None
         self._sequence_counter = 0
         self._lock = threading.Lock()
 
-        # Network control sockets and background threads
+        # Network control sockets and threads
         self._server_sock: socket.socket | None = None
         self._server_thread: threading.Thread | None = None
         self._server_running = False
         self._active_client_sock: socket.socket | None = None
         self._client_sock: socket.socket | None = None
         self._client_reader_thread: threading.Thread | None = None
+
+        # Network media streaming sockets and threads
+        self._media_server_sock: socket.socket | None = None
+        self._media_server_thread: threading.Thread | None = None
+        self._media_client_sock: socket.socket | None = None
+        self._media_receiver_thread: threading.Thread | None = None
 
     def set_state(self, state: ConnectionState, detail: str = "") -> None:
         self.state = state
@@ -141,7 +160,7 @@ class ConnectionManager:
 
     # Host Control Server Lifecycle
     def start_control_server(self, host: str = "", port: int | None = None) -> None:
-        """Starts the TCP control server on the host machine."""
+        """Starts the TCP control server and media server on the host machine."""
         if self._server_running:
             return
 
@@ -164,8 +183,10 @@ class ConnectionManager:
         )
         self._server_thread.start()
 
+        self.start_media_server(host=host, port=self.media_port)
+
     def stop_control_server(self) -> None:
-        """Stops the TCP control server and cleans up active connections."""
+        """Stops the TCP control server and media server."""
         self._server_running = False
         if self._server_sock:
             try:
@@ -173,6 +194,8 @@ class ConnectionManager:
             except OSError:
                 pass
             self._server_sock = None
+
+        self.stop_media_server()
 
     def _control_server_loop(self) -> None:
         if self._server_sock:
@@ -309,7 +332,7 @@ class ConnectionManager:
                         "assigned_width": width,
                         "assigned_height": height,
                         "assigned_fps": 60,
-                        "media_port": 53893,
+                        "media_port": self.media_port,
                         "is_virtual_display": False,
                     },
                 )
@@ -348,10 +371,76 @@ class ConnectionManager:
 
         elif msg_type == MessageType.INPUT_RELEASE_ALL.value:
             if self.input_filter:
-                self.input_filter.release_all()
+                release_info = self.input_filter.release_all()
+                if self.input_injector:
+                    self.input_injector.release_all(
+                        keys=release_info.get("released_keys"),
+                        buttons=release_info.get("released_buttons"),
+                    )
 
         elif msg_type == MessageType.SESSION_STOP.value:
             self.disconnect(reason="Remote peer disconnected")
+
+    # Host Media Streaming Server
+    def start_media_server(self, host: str = "", port: int = DEFAULT_MEDIA_PORT) -> None:
+        """Starts media streaming server on host to stream video frames."""
+        self.media_port = port
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+            sock.listen(2)
+        except OSError:
+            return
+
+        self._media_server_sock = sock
+        self._media_server_thread = threading.Thread(
+            target=self._media_server_loop, daemon=True, name="MediaServer"
+        )
+        self._media_server_thread.start()
+
+    def stop_media_server(self) -> None:
+        """Stops media streaming server."""
+        if self._media_server_sock:
+            try:
+                self._media_server_sock.close()
+            except OSError:
+                pass
+            self._media_server_sock = None
+        if self._media_client_sock:
+            try:
+                self._media_client_sock.close()
+            except OSError:
+                pass
+            self._media_client_sock = None
+
+    def _media_server_loop(self) -> None:
+        if self._media_server_sock:
+            self._media_server_sock.settimeout(1.0)
+        while self._server_running and self._media_server_sock:
+            try:
+                client, _ = self._media_server_sock.accept()
+                self._media_client_sock = client
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+
+    def broadcast_frame(self, frame_bytes: bytes) -> bool:
+        """Streams a single frame to the connected client over the media channel."""
+        if not self._media_client_sock or not frame_bytes:
+            return False
+        header = struct.pack(">I", len(frame_bytes))
+        try:
+            self._media_client_sock.sendall(header + frame_bytes)
+            return True
+        except OSError:
+            try:
+                self._media_client_sock.close()
+            except OSError:
+                pass
+            self._media_client_sock = None
+            return False
 
     # Client-Side Network Helpers
     def pair_with_host(
@@ -363,10 +452,6 @@ class ConnectionManager:
         client_fingerprint: str,
         code: str | None = None,
     ) -> bool:
-        """
-        Connects to a remote host, requests a pairing challenge, and verifies the 6-digit PIN.
-        On success, persists the host in the local client database.
-        """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5.0)
         try:
@@ -428,9 +513,6 @@ class ConnectionManager:
         display_width: int = 1920,
         display_height: int = 1080,
     ) -> bool:
-        """
-        Connects client to host over TCP control channel and establishes an active streaming session.
-        """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5.0)
         try:
@@ -450,6 +532,7 @@ class ConnectionManager:
             if resp and resp.type == MessageType.SESSION_ACCEPT.value:
                 self._client_sock = sock
                 self.active_session_id = resp.session_id or resp.payload.get("session_id")
+                media_port = resp.payload.get("media_port", self.media_port)
                 self.set_state(ConnectionState.STREAMING, "Session active")
                 self._sequence_counter = 0
 
@@ -457,6 +540,9 @@ class ConnectionManager:
                     target=self._client_socket_reader, daemon=True, name="ClientControlReader"
                 )
                 self._client_reader_thread.start()
+
+                # Start media receiver
+                self.start_media_receiver(host_address, media_port)
                 return True
             else:
                 msg = resp.payload.get("message", "Session rejected") if resp else "No response"
@@ -469,6 +555,51 @@ class ConnectionManager:
             except OSError:
                 pass
             return False
+
+    def start_media_receiver(self, host_address: str, port: int) -> None:
+        """Connects to host's media port and receives incoming video frames."""
+        self._media_receiver_thread = threading.Thread(
+            target=self._media_receiver_loop,
+            args=(host_address, port),
+            daemon=True,
+            name="MediaReceiver",
+        )
+        self._media_receiver_thread.start()
+
+    def _media_receiver_loop(self, host_address: str, port: int) -> None:
+        media_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        media_sock.settimeout(5.0)
+        try:
+            media_sock.connect((host_address, port))
+            self._media_client_sock = media_sock
+            while self.state == ConnectionState.STREAMING:
+                # Read 4-byte length prefix
+                header = media_sock.recv(4)
+                if not header or len(header) < 4:
+                    break
+                (frame_len,) = struct.unpack(">I", header)
+                if frame_len <= 0 or frame_len > 10 * 1024 * 1024:
+                    break
+
+                # Read frame payload
+                frame_buf = bytearray()
+                while len(frame_buf) < frame_len:
+                    chunk = media_sock.recv(min(8192, frame_len - len(frame_buf)))
+                    if not chunk:
+                        break
+                    frame_buf.extend(chunk)
+
+                if len(frame_buf) == frame_len and self.on_frame_received:
+                    self.on_frame_received(bytes(frame_buf))
+        except OSError:
+            pass
+        finally:
+            try:
+                media_sock.close()
+            except OSError:
+                pass
+            if self._media_client_sock == media_sock:
+                self._media_client_sock = None
 
     def _client_socket_reader(self) -> None:
         if not self._client_sock:
@@ -499,7 +630,6 @@ class ConnectionManager:
                 self.disconnect(reason="Host connection lost")
 
     def send_pointer(self, x: float, y: float, normalized: bool = False) -> None:
-        """Sends pointer coordinates to the host."""
         if not self._client_sock or self.state != ConnectionState.STREAMING:
             return
         self._sequence_counter += 1
@@ -515,7 +645,6 @@ class ConnectionManager:
             self.disconnect(reason="Send failed")
 
     def send_button(self, button: str, pressed: bool) -> None:
-        """Sends button state to the host."""
         if not self._client_sock or self.state != ConnectionState.STREAMING:
             return
         self._sequence_counter += 1
@@ -531,7 +660,6 @@ class ConnectionManager:
             self.disconnect(reason="Send failed")
 
     def send_key(self, key_code: int, key_name: str, pressed: bool) -> None:
-        """Sends key state to the host."""
         if not self._client_sock or self.state != ConnectionState.STREAMING:
             return
         self._sequence_counter += 1
@@ -547,7 +675,6 @@ class ConnectionManager:
             self.disconnect(reason="Send failed")
 
     def send_release_all(self, reason: str = "client_reset") -> None:
-        """Sends release-all command to the host."""
         if not self._client_sock or self.state != ConnectionState.STREAMING:
             return
         self._sequence_counter += 1
@@ -571,12 +698,7 @@ class ConnectionManager:
         display_width: int = 1920,
         display_height: int = 1080,
     ) -> bool:
-        """
-        Connects to a paired peer.
-        Enforces that unauthenticated or revoked peers are rejected.
-        """
         with self._lock:
-            # Security verification
             if not self.pairing_manager.is_peer_paired(peer_device_id, peer_fingerprint):
                 self.set_state(
                     ConnectionState.ERROR,
@@ -595,7 +717,6 @@ class ConnectionManager:
             self.peer_address = peer_address
             self.set_state(ConnectionState.CONNECTING, f"Establishing session with {peer_address}...")
 
-            # Generate session
             session_id = str(uuid.uuid4())
             self.active_session_id = session_id
             self.input_filter = InputFilter(
@@ -603,12 +724,12 @@ class ConnectionManager:
                 display_width=display_width,
                 display_height=display_height,
             )
-            self._sequence_counter = 0
+            if self.input_injector:
+                self.input_injector.update_bounds(display_width, display_height)
 
-            # Record in connection history
+            self._sequence_counter = 0
             self._history_id = self.db.record_connection_start(peer_device_id)
 
-            # Transition to streaming
             self.set_state(ConnectionState.STREAMING, "Session active")
             self.db.log_diagnostic_event(
                 level="INFO",
@@ -620,10 +741,6 @@ class ConnectionManager:
             return True
 
     def disconnect(self, reason: str = "User disconnect") -> None:
-        """
-        Gracefully tears down active session.
-        MANDATORY SECURITY ACTION: releases any held inputs immediately.
-        """
         with self._lock:
             if self._client_sock:
                 try:
@@ -651,8 +768,21 @@ class ConnectionManager:
                     pass
                 self._active_client_sock = None
 
+            if self._media_client_sock:
+                try:
+                    self._media_client_sock.close()
+                except OSError:
+                    pass
+                self._media_client_sock = None
+
             if self.input_filter:
                 release_info = self.input_filter.release_all()
+                if self.input_injector:
+                    self.input_injector.release_all(
+                        keys=release_info.get("released_keys"),
+                        buttons=release_info.get("released_buttons"),
+                    )
+
                 if release_info["released_keys"] or release_info["released_buttons"]:
                     self.db.log_diagnostic_event(
                         level="INFO",
@@ -680,17 +810,22 @@ class ConnectionManager:
     def handle_incoming_pointer(
         self, payload: PointerPayload, sequence: int
     ) -> tuple[float, float] | None:
-        """Handles incoming pointer with authentication, sequence check, and coordinate clamping."""
         if self.state != ConnectionState.STREAMING or not self.input_filter:
             raise ProtocolError(ErrorCode.INPUT_REJECTED, "Session is not active")
-        return self.input_filter.process_pointer(payload, sequence)
+        coords = self.input_filter.process_pointer(payload, sequence)
+        if coords and self.input_injector:
+            self.input_injector.inject_pointer(coords[0], coords[1])
+        return coords
 
     def handle_incoming_button(
         self, payload: ButtonPayload, sequence: int
     ) -> tuple[str, bool] | None:
         if self.state != ConnectionState.STREAMING or not self.input_filter:
             raise ProtocolError(ErrorCode.INPUT_REJECTED, "Session is not active")
-        return self.input_filter.process_button(payload, sequence)
+        res = self.input_filter.process_button(payload, sequence)
+        if res and self.input_injector:
+            self.input_injector.inject_button(res[0], res[1])
+        return res
 
     def handle_incoming_key(
         self, payload: KeyPayload, sequence: int
@@ -698,6 +833,8 @@ class ConnectionManager:
         if self.state != ConnectionState.STREAMING or not self.input_filter:
             raise ProtocolError(ErrorCode.INPUT_REJECTED, "Session is not active")
         res = self.input_filter.process_key(payload, sequence)
+        if res and self.input_injector:
+            self.input_injector.inject_key(res[0], res[2])
         if self.input_filter.emergency_escape_triggered:
             self.disconnect(reason="Emergency escape shortcut triggered")
         return res

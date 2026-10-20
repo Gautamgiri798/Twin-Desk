@@ -42,6 +42,7 @@ from dualdesk.ui.components import (
     StatCard,
 )
 from dualdesk.ui.theme import DARK_THEME_QSS
+from dualdesk.ui.viewer import StreamViewerWidget, StreamWindow
 
 
 class DualDeskApp(QMainWindow):
@@ -79,13 +80,16 @@ class DualDeskApp(QMainWindow):
             is_virtual_display=self.driver_status.is_installed,
         )
 
+        self._stream_window: StreamWindow | None = None
         self.connection_manager = ConnectionManager(
             db=self.db,
             pairing_manager=self.pairing_manager,
             role=self.role,
             on_state_changed=self._on_connection_state_changed,
             on_telemetry_updated=self._on_telemetry_updated,
+            on_frame_received=self._on_stream_frame_received,
         )
+        self.stream_viewer = StreamViewerWidget(self.connection_manager, self)
         if self.role == "host":
             self.connection_manager.start_control_server()
 
@@ -114,6 +118,7 @@ class DualDeskApp(QMainWindow):
         self.stack.addWidget(self._build_dashboard_page())
         self.stack.addWidget(self._build_devices_page())
         self.stack.addWidget(self._build_display_page())
+        self.stack.addWidget(self._build_stream_page())
         self.stack.addWidget(self._build_performance_page())
         self.stack.addWidget(self._build_diagnostics_page())
         self.stack.addWidget(self._build_settings_page())
@@ -145,9 +150,10 @@ class DualDeskApp(QMainWindow):
             ("Dashboard", 0),
             ("Devices", 1),
             ("Display", 2),
-            ("Performance", 3),
-            ("Diagnostics", 4),
-            ("Settings", 5),
+            ("Stream View", 3),
+            ("Performance", 4),
+            ("Diagnostics", 5),
+            ("Settings", 6),
         ]
 
         for text, idx in nav_items:
@@ -174,7 +180,7 @@ class DualDeskApp(QMainWindow):
             btn.setChecked(i == index)
         if index == 1:
             self._refresh_devices_table()
-        elif index == 4:
+        elif index == 5:
             self._refresh_diagnostics_table()
 
     # 1. Dashboard Page
@@ -365,7 +371,41 @@ class DualDeskApp(QMainWindow):
         layout.addStretch(1)
         return page
 
-    # 4. Performance Page
+    # 4. Stream View Page
+    def _build_stream_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        title = QLabel("Remote Stream Viewport")
+        title.setStyleSheet("font-size: 20px; font-weight: 700; color: #f8fafc;")
+        header.addWidget(title)
+        header.addStretch(1)
+
+        btn_popout = QPushButton("Pop Out Window")
+        btn_popout.setProperty("class", "SecondaryButton")
+        btn_popout.clicked.connect(self._popout_stream_window)
+        header.addWidget(btn_popout)
+        layout.addLayout(header)
+
+        layout.addWidget(self.stream_viewer, 1)
+        return page
+
+    def _popout_stream_window(self) -> None:
+        if not self._stream_window:
+            self._stream_window = StreamWindow(self.connection_manager)
+        self._stream_window.show()
+        self._stream_window.raise_()
+        self._stream_window.activateWindow()
+
+    def _on_stream_frame_received(self, frame_bytes: bytes) -> None:
+        self.stream_viewer.update_frame(frame_bytes)
+        if self._stream_window and self._stream_window.isVisible():
+            self._stream_window.update_frame(frame_bytes)
+
+    # 5. Performance Page
     def _build_performance_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -594,8 +634,10 @@ class DualDeskApp(QMainWindow):
         )
 
     def _on_timer_tick(self) -> None:
-        if self.connection_manager.state == ConnectionState.STREAMING:
-            _, stats = self.capture_adapter.capture_next_frame()
+        if self.connection_manager.state == ConnectionState.STREAMING and self.role == "host":
+            frame_bytes, stats = self.capture_adapter.capture_next_frame()
+            if frame_bytes:
+                self.connection_manager.broadcast_frame(frame_bytes)
             self.connection_manager.update_telemetry(
                 fps=stats.fps,
                 latency_ms=stats.latency_ms,

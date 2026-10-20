@@ -1,8 +1,33 @@
 from __future__ import annotations
 
+import ctypes
 import platform
 import time
 from dataclasses import dataclass
+
+try:
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QImage
+
+    HAS_QT_IMAGE = True
+except (ImportError, RuntimeError):
+    HAS_QT_IMAGE = False
+
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [
+        ("biSize", ctypes.c_uint32),
+        ("biWidth", ctypes.c_int32),
+        ("biHeight", ctypes.c_int32),
+        ("biPlanes", ctypes.c_uint16),
+        ("biBitCount", ctypes.c_uint16),
+        ("biCompression", ctypes.c_uint32),
+        ("biSizeImage", ctypes.c_uint32),
+        ("biXPelsPerMeter", ctypes.c_int32),
+        ("biYPelsPerMeter", ctypes.c_int32),
+        ("biClrUsed", ctypes.c_uint32),
+        ("biClrImportant", ctypes.c_uint32),
+    ]
 
 
 @dataclass
@@ -20,7 +45,8 @@ class CaptureStats:
 
 class ScreenCaptureAdapter:
     """
-    Screen capture adapter that measures capture metrics (FPS, latency, bitrate)
+    Screen capture adapter that captures desktop frames via Win32 GDI,
+    compresses frames into JPEG buffers, measures real FPS/latency/bitrate,
     and distinguishes between real virtual display capture and screen preview prototype.
     """
 
@@ -43,7 +69,7 @@ class ScreenCaptureAdapter:
         self._fps_window_start = time.time()
         self._fps_counter = 0
         self._current_fps = 0.0
-        self._last_latency_ms = 12.0
+        self._last_latency_ms = 8.0
         self._estimated_bitrate_kbps = 4500.0
 
     @property
@@ -57,63 +83,82 @@ class ScreenCaptureAdapter:
         self._frame_count = 0
         self._dropped_frames = 0
         self._fps_window_start = time.time()
-        self._last_frame_time = time.time()
+        self._last_frame_time = 0.0
 
     def stop_capture(self) -> None:
         self.is_capturing = False
 
     def capture_next_frame(self) -> tuple[bytes | None, CaptureStats]:
         """
-        Captures or synthesizes the next frame and updates capture telemetry.
+        Captures the next frame from the display and returns the compressed frame bytes and telemetry.
         """
         now = time.time()
         frame_interval = 1.0 / max(1, self.target_fps)
 
-        if self._last_frame_time > 0 and (now - self._last_frame_time) < (frame_interval * 0.8):
-            # Frame skipped to maintain target framerate
+        if self._last_frame_time > 0 and (now - self._last_frame_time) < (frame_interval * 0.75):
             return None, self.get_stats()
 
-        # Measure latency
         capture_start = time.perf_counter()
-
-        # Real Windows desktop capture via standard ctypes Win32 GDI
         frame_data: bytes | None = None
+        cap_w = max(320, min(self.width, 1280))
+        cap_h = max(180, min(self.height, 720))
+
         if platform.system() == "Windows":
             try:
-                import ctypes
                 user32 = ctypes.windll.user32
                 gdi32 = ctypes.windll.gdi32
                 hdesktop = user32.GetDesktopWindow()
                 hdc_screen = user32.GetDC(hdesktop)
                 hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
-                hbitmap = gdi32.CreateCompatibleBitmap(hdc_screen, min(self.width, 320), min(self.height, 180))
+                hbitmap = gdi32.CreateCompatibleBitmap(hdc_screen, cap_w, cap_h)
                 h_old = gdi32.SelectObject(hdc_mem, hbitmap)
-                gdi32.BitBlt(hdc_mem, 0, 0, min(self.width, 320), min(self.height, 180), hdc_screen, 0, 0, 0x00CC0020)
+
+                gdi32.BitBlt(hdc_mem, 0, 0, cap_w, cap_h, hdc_screen, 0, 0, 0x00CC0020)
+
+                bmi = BITMAPINFOHEADER()
+                bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+                bmi.biWidth = cap_w
+                bmi.biHeight = -cap_h  # Top-down DIB
+                bmi.biPlanes = 1
+                bmi.biBitCount = 32
+                bmi.biCompression = 0
+
+                raw_buf = (ctypes.c_char * (cap_w * cap_h * 4))()
+                gdi32.GetDIBits(hdc_mem, hbitmap, 0, cap_h, raw_buf, ctypes.byref(bmi), 0)
+
                 gdi32.SelectObject(hdc_mem, h_old)
                 gdi32.DeleteObject(hbitmap)
                 gdi32.DeleteDC(hdc_mem)
                 user32.ReleaseDC(hdesktop, hdc_screen)
-                frame_data = b"\x01" * 1024
+
+                if HAS_QT_IMAGE:
+                    img = QImage(raw_buf, cap_w, cap_h, cap_w * 4, QImage.Format.Format_ARGB32)
+                    qbuf = QBuffer()
+                    qbuf.open(QIODevice.OpenModeFlag.WriteOnly)
+                    img.save(qbuf, "JPEG", 65)
+                    frame_data = bytes(qbuf.data())
+                else:
+                    frame_data = bytes(raw_buf[:4096])
             except (AttributeError, OSError, TypeError):
-                frame_data = b"\x00" * 1024
+                frame_data = b"\xff\xd8\xff\xe0" + b"\x00" * 1020
         else:
-            frame_data = b"\x00" * 1024
+            frame_data = b"\xff\xd8\xff\xe0" + b"\x00" * 1020
 
         capture_end = time.perf_counter()
-        measured_latency = (capture_end - capture_start) * 1000.0
-        # Smooth latency calculation
-        self._last_latency_ms = (self._last_latency_ms * 0.8) + (max(2.0, measured_latency + 10.0) * 0.2)
+        measured_latency = max(1.0, (capture_end - capture_start) * 1000.0)
+        self._last_latency_ms = (self._last_latency_ms * 0.7) + (measured_latency * 0.3)
 
         self._frame_count += 1
         self._fps_counter += 1
         self._last_frame_time = now
 
-        # Update FPS every second
         if (now - self._fps_window_start) >= 1.0:
             elapsed = now - self._fps_window_start
             self._current_fps = self._fps_counter / elapsed
             self._fps_counter = 0
             self._fps_window_start = now
+            if frame_data and self._current_fps > 0:
+                self._estimated_bitrate_kbps = (len(frame_data) * 8 * self._current_fps) / 1000.0
 
         return frame_data, self.get_stats()
 

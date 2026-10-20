@@ -23,14 +23,17 @@ def qapp():
 def test_dualdesk_ui_initialization(qapp):
     window = DualDeskApp()
     assert window.windowTitle().startswith("DualDesk")
-    assert window.stack.count() == 6  # 6 main views: Dashboard, Devices, Display, Performance, Diagnostics, Settings
+    assert window.stack.count() == 7  # 7 main views: Dashboard, Devices, Display, Stream View, Performance, Diagnostics, Settings
 
     # Check page switching
     window._switch_page(1)
     assert window.stack.currentIndex() == 1
 
-    window._switch_page(4)
-    assert window.stack.currentIndex() == 4
+    window._switch_page(3)
+    assert window.stack.currentIndex() == 3
+
+    window._switch_page(5)
+    assert window.stack.currentIndex() == 5
 
     window._switch_page(0)
     assert window.stack.currentIndex() == 0
