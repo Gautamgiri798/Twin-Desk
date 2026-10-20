@@ -4,6 +4,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QKeyEvent, QMouseEvent, QPainter, QPixmap
 from PySide6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
 
+from dualdesk.display.decoder import VideoDecoderAdapter
 from dualdesk.network.transport import ConnectionManager
 
 
@@ -21,6 +22,7 @@ class StreamViewerWidget(QWidget):
     ) -> None:
         super().__init__(parent)
         self.connection_manager = connection_manager
+        self.decoder = VideoDecoderAdapter()
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setStyleSheet("background-color: #0b0f19;")
@@ -31,12 +33,17 @@ class StreamViewerWidget(QWidget):
         self._stream_height = 1080
 
     def update_frame(self, frame_bytes: bytes) -> None:
-        """Receives incoming compressed frame bytes and triggers repaint."""
+        """Receives incoming compressed frame bytes (H.264 NAL or JPEG) and triggers repaint."""
+        decoded = self.decoder.decode_packet(frame_bytes)
         img = QImage.fromData(frame_bytes)
         if not img.isNull():
             self._pixmap = QPixmap.fromImage(img)
             self._stream_width = img.width()
             self._stream_height = img.height()
+            self.update()
+        elif decoded and decoded.format == "h264_nal":
+            self._stream_width = decoded.width
+            self._stream_height = decoded.height
             self.update()
 
     def paintEvent(self, event) -> None:

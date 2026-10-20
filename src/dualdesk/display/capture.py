@@ -6,6 +6,11 @@ import time
 from dataclasses import dataclass
 
 from dualdesk.display.adaptive import AdaptiveRateController
+from dualdesk.display.encoder import (
+    EncoderConfig,
+    VideoCodec,
+    VideoEncoderAdapter,
+)
 
 try:
     from PySide6.QtCore import QBuffer, QIODevice
@@ -45,6 +50,8 @@ class CaptureStats:
     source_label: str
     quality: int = 70
     is_congested: bool = False
+    codec: str = "jpeg"
+    is_hardware_accelerated: bool = False
 
 
 class ScreenCaptureAdapter:
@@ -62,6 +69,8 @@ class ScreenCaptureAdapter:
         quality: int = 70,
         is_virtual_display: bool = False,
         adaptive_controller: AdaptiveRateController | None = None,
+        codec: str = "jpeg",
+        encoder: VideoEncoderAdapter | None = None,
     ) -> None:
         self.width = width
         self.height = height
@@ -69,6 +78,18 @@ class ScreenCaptureAdapter:
         self.quality = quality
         self.is_virtual_display = is_virtual_display
         self.adaptive_controller = adaptive_controller
+        self.codec = codec.lower()
+        if self.codec == "h264" and encoder is None:
+            self.encoder: VideoEncoderAdapter | None = VideoEncoderAdapter(
+                EncoderConfig(
+                    codec=VideoCodec.H264,
+                    width=width,
+                    height=height,
+                    target_fps=target_fps,
+                )
+            )
+        else:
+            self.encoder = encoder
         self.is_capturing = False
 
         self._frame_count = 0
@@ -143,7 +164,13 @@ class ScreenCaptureAdapter:
                 gdi32.DeleteDC(hdc_mem)
                 user32.ReleaseDC(hdesktop, hdc_screen)
 
-                if HAS_QT_IMAGE:
+                if self.codec == "h264" and self.encoder:
+                    packet = self.encoder.encode_frame(
+                        raw_pixels=bytes(raw_buf[: cap_w * cap_h * 4]),
+                        timestamp_us=int(now * 1_000_000),
+                    )
+                    frame_data = packet.data
+                elif HAS_QT_IMAGE:
                     img = QImage(raw_buf, cap_w, cap_h, cap_w * 4, QImage.Format.Format_ARGB32)
                     qbuf = QBuffer()
                     qbuf.open(QIODevice.OpenModeFlag.WriteOnly)
@@ -152,9 +179,17 @@ class ScreenCaptureAdapter:
                 else:
                     frame_data = bytes(raw_buf[:4096])
             except (AttributeError, OSError, TypeError):
-                frame_data = b"\xff\xd8\xff\xe0" + b"\x00" * 1020
+                if self.codec == "h264" and self.encoder:
+                    packet = self.encoder.encode_frame(raw_pixels=b"\x00" * 1024)
+                    frame_data = packet.data
+                else:
+                    frame_data = b"\xff\xd8\xff\xe0" + b"\x00" * 1020
         else:
-            frame_data = b"\xff\xd8\xff\xe0" + b"\x00" * 1020
+            if self.codec == "h264" and self.encoder:
+                packet = self.encoder.encode_frame(raw_pixels=b"\x00" * 1024)
+                frame_data = packet.data
+            else:
+                frame_data = b"\xff\xd8\xff\xe0" + b"\x00" * 1020
 
         capture_end = time.perf_counter()
         measured_latency = max(1.0, (capture_end - capture_start) * 1000.0)
@@ -178,6 +213,7 @@ class ScreenCaptureAdapter:
         is_congested = (
             self.adaptive_controller.is_congested if self.adaptive_controller else False
         )
+        is_hw = self.encoder.is_hardware_accelerated if self.encoder else False
         return CaptureStats(
             fps=round(self._current_fps, 1),
             latency_ms=round(self._last_latency_ms, 1),
@@ -190,4 +226,6 @@ class ScreenCaptureAdapter:
             source_label=self.source_label,
             quality=self.quality,
             is_congested=is_congested,
+            codec=self.codec,
+            is_hardware_accelerated=is_hw,
         )
