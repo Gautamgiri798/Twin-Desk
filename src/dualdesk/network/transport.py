@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import enum
 import socket
+import ssl
 import struct
 import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from dualdesk.display.input_injector import InputInjector
 from dualdesk.protocol.models import (
@@ -20,6 +22,11 @@ from dualdesk.protocol.models import (
 )
 from dualdesk.security.input_filter import InputFilter
 from dualdesk.security.pairing import PairingManager, PairingSession
+from dualdesk.security.tls import (
+    create_tls_client_context,
+    create_tls_server_context,
+    verify_peer_certificate,
+)
 from dualdesk.storage.db import DualDeskDB
 
 DEFAULT_CONTROL_PORT = 53892
@@ -86,6 +93,10 @@ class ConnectionManager:
         control_port: int = DEFAULT_CONTROL_PORT,
         media_port: int = DEFAULT_MEDIA_PORT,
         enable_input_injection: bool = True,
+        enable_tls: bool = False,
+        tls_cert_path: Path | None = None,
+        tls_key_path: Path | None = None,
+        tls_expected_fingerprint: str | None = None,
         on_state_changed: Callable[[ConnectionState, str], None] | None = None,
         on_telemetry_updated: Callable[[SessionTelemetry], None] | None = None,
         on_frame_received: Callable[[bytes], None] | None = None,
@@ -96,9 +107,16 @@ class ConnectionManager:
         self.control_port = control_port
         self.media_port = media_port
         self.enable_input_injection = enable_input_injection
+        self.enable_tls = enable_tls
+        self.tls_cert_path = tls_cert_path
+        self.tls_key_path = tls_key_path
+        self.tls_expected_fingerprint = tls_expected_fingerprint
         self.on_state_changed = on_state_changed
         self.on_telemetry_updated = on_telemetry_updated
         self.on_frame_received = on_frame_received
+
+        self._tls_server_context: ssl.SSLContext | None = None
+        self._tls_client_context: ssl.SSLContext | None = None
 
         self.state = ConnectionState.NOT_CONNECTED
         self.active_session_id: str | None = None
@@ -167,6 +185,11 @@ class ConnectionManager:
         port = port or self.control_port
         self.control_port = port
 
+        if self.enable_tls and self.tls_cert_path and self.tls_key_path:
+            self._tls_server_context = create_tls_server_context(
+                self.tls_cert_path, self.tls_key_path
+            )
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -204,10 +227,14 @@ class ConnectionManager:
         while self._server_running and self._server_sock:
             try:
                 client_sock, client_addr = self._server_sock.accept()
+                if self._tls_server_context:
+                    client_sock = self._tls_server_context.wrap_socket(
+                        client_sock, server_side=True
+                    )
             except TimeoutError:
                 continue
-            except OSError:
-                break
+            except (ssl.SSLError, OSError):
+                continue
 
             t = threading.Thread(
                 target=self._handle_client_connection,
@@ -420,11 +447,13 @@ class ConnectionManager:
         while self._server_running and self._media_server_sock:
             try:
                 client, _ = self._media_server_sock.accept()
+                if self._tls_server_context:
+                    client = self._tls_server_context.wrap_socket(client, server_side=True)
                 self._media_client_sock = client
             except TimeoutError:
                 continue
-            except OSError:
-                break
+            except (ssl.SSLError, OSError):
+                continue
 
     def broadcast_frame(self, frame_bytes: bytes) -> bool:
         """Streams a single frame to the connected client over the media channel."""
@@ -456,6 +485,13 @@ class ConnectionManager:
         sock.settimeout(5.0)
         try:
             sock.connect((host_address, port))
+            if self.enable_tls:
+                if not self._tls_client_context:
+                    self._tls_client_context = create_tls_client_context()
+                sock = self._tls_client_context.wrap_socket(
+                    sock, server_hostname="dualdesk.local"
+                )
+
             req = MessageEnvelope(
                 type=MessageType.PAIRING_REQUEST.value,
                 payload={
@@ -496,7 +532,7 @@ class ConnectionManager:
                 )
                 return True
             return False
-        except OSError:
+        except (ssl.SSLError, OSError):
             return False
         finally:
             try:
@@ -517,6 +553,21 @@ class ConnectionManager:
         sock.settimeout(5.0)
         try:
             sock.connect((host_address, port))
+            if self.enable_tls:
+                if not self._tls_client_context:
+                    self._tls_client_context = create_tls_client_context()
+                sock = self._tls_client_context.wrap_socket(
+                    sock, server_hostname="dualdesk.local"
+                )
+                if self.tls_expected_fingerprint and not verify_peer_certificate(
+                    sock, self.tls_expected_fingerprint
+                ):
+                    self.set_state(
+                        ConnectionState.ERROR, "TLS peer certificate fingerprint mismatch"
+                    )
+                    sock.close()
+                    return False
+
             start_env = MessageEnvelope(
                 type=MessageType.SESSION_START.value,
                 payload={
@@ -548,7 +599,7 @@ class ConnectionManager:
                 msg = resp.payload.get("message", "Session rejected") if resp else "No response"
                 self.set_state(ConnectionState.ERROR, msg)
                 return False
-        except OSError as e:
+        except (ssl.SSLError, OSError) as e:
             self.set_state(ConnectionState.ERROR, f"Failed to connect to host: {e}")
             try:
                 sock.close()
@@ -571,6 +622,12 @@ class ConnectionManager:
         media_sock.settimeout(5.0)
         try:
             media_sock.connect((host_address, port))
+            if self.enable_tls:
+                if not self._tls_client_context:
+                    self._tls_client_context = create_tls_client_context()
+                media_sock = self._tls_client_context.wrap_socket(
+                    media_sock, server_hostname="dualdesk.local"
+                )
             self._media_client_sock = media_sock
             while self.state == ConnectionState.STREAMING:
                 # Read 4-byte length prefix

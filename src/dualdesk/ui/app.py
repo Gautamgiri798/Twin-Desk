@@ -33,6 +33,7 @@ from dualdesk.network.transport import ConnectionManager, ConnectionState, Sessi
 from dualdesk.protocol.models import ProtocolError
 from dualdesk.security.identity import DeviceIdentity, get_or_create_device_identity
 from dualdesk.security.pairing import PairingManager
+from dualdesk.security.tls import get_or_create_tls_credentials
 from dualdesk.storage.db import DualDeskDB
 from dualdesk.ui.components import (
     DeviceCard,
@@ -81,10 +82,16 @@ class DualDeskApp(QMainWindow):
         )
 
         self._stream_window: StreamWindow | None = None
+        cert_path, key_path, _ = get_or_create_tls_credentials(
+            self.db.db_path.parent, self.identity.device_id
+        )
         self.connection_manager = ConnectionManager(
             db=self.db,
             pairing_manager=self.pairing_manager,
             role=self.role,
+            enable_tls=True,
+            tls_cert_path=cert_path,
+            tls_key_path=key_path,
             on_state_changed=self._on_connection_state_changed,
             on_telemetry_updated=self._on_telemetry_updated,
             on_frame_received=self._on_stream_frame_received,
