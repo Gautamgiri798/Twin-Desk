@@ -1,0 +1,1 @@
+"""DualDesk desktop application scaffold."""
