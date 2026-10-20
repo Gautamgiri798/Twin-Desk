@@ -348,6 +348,7 @@ class DualDeskApp(QMainWindow):
         self.res_combo = QComboBox()
         for mode in get_supported_modes():
             self.res_combo.addItem(mode.name, mode)
+        self.res_combo.currentIndexChanged.connect(self._on_resolution_changed)
         res_row.addWidget(self.res_combo)
         res_row.addStretch(1)
         f_layout.addLayout(res_row)
@@ -382,6 +383,7 @@ class DualDeskApp(QMainWindow):
         self.preset_combo = QComboBox()
         self.preset_combo.addItems(["Low Latency (Interactive)", "Balanced (Default)", "High Fidelity (Crisp Text)"])
         self.preset_combo.setCurrentIndex(1)
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
         p_row.addWidget(self.preset_combo)
         c_layout.addLayout(p_row)
 
@@ -392,7 +394,7 @@ class DualDeskApp(QMainWindow):
         self.bitrate_slider.setRange(1000, 25000)
         self.bitrate_slider.setValue(6000)
         self.bitrate_val_label = QLabel("6000 kbps")
-        self.bitrate_slider.valueChanged.connect(lambda v: self.bitrate_val_label.setText(f"{v} kbps"))
+        self.bitrate_slider.valueChanged.connect(self._on_bitrate_changed)
         b_row.addWidget(self.bitrate_slider)
         b_row.addWidget(self.bitrate_val_label)
         c_layout.addLayout(b_row)
@@ -480,6 +482,24 @@ class DualDeskApp(QMainWindow):
         return page
 
     # Event handlers
+    def _on_resolution_changed(self, idx: int) -> None:
+        mode = self.res_combo.currentData()
+        if mode:
+            self.capture_adapter.width = mode.width
+            self.capture_adapter.height = mode.height
+            self.capture_adapter.target_fps = mode.refresh_rate
+            if self.connection_manager.input_filter:
+                self.connection_manager.input_filter.update_bounds(mode.width, mode.height)
+
+    def _on_preset_changed(self, idx: int) -> None:
+        bitrates = [4000, 6000, 12000]
+        bitrate = bitrates[idx] if idx < len(bitrates) else 6000
+        self.bitrate_slider.setValue(bitrate)
+
+    def _on_bitrate_changed(self, value: int) -> None:
+        self.bitrate_val_label.setText(f"{value} kbps")
+        self.capture_adapter._estimated_bitrate_kbps = float(value)
+
     def _on_role_changed(self, idx: int) -> None:
         new_role = "host" if idx == 0 else "client"
         self.role = new_role
