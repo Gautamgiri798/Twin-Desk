@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -106,6 +107,8 @@ class DualDeskDB:
 
     def __init__(self, db_path: Path | str | None = None) -> None:
         self.db_path = Path(db_path) if db_path else get_default_db_path()
+        self._lock = threading.Lock()
+        self._closed = False
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_migrations()
@@ -325,31 +328,37 @@ class DualDeskDB:
         bytes_sent: int | None = None,
         bytes_received: int | None = None,
     ) -> None:
-        now_str = datetime.now(UTC).isoformat()
-        with self.conn:
-            self.conn.execute(
-                """
-                UPDATE connection_history SET
-                    ended_at = ?,
-                    result = ?,
-                    failure_code = ?,
-                    avg_fps = ?,
-                    avg_latency_ms = ?,
-                    bytes_sent = ?,
-                    bytes_received = ?
-                WHERE id = ?
-                """,
-                (
-                    now_str,
-                    result,
-                    failure_code,
-                    avg_fps,
-                    avg_latency_ms,
-                    bytes_sent,
-                    bytes_received,
-                    history_id,
-                ),
-            )
+        with self._lock:
+            if self._closed:
+                return
+            now_str = datetime.now(UTC).isoformat()
+            try:
+                with self.conn:
+                    self.conn.execute(
+                        """
+                        UPDATE connection_history SET
+                            ended_at = ?,
+                            result = ?,
+                            failure_code = ?,
+                            avg_fps = ?,
+                            avg_latency_ms = ?,
+                            bytes_sent = ?,
+                            bytes_received = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            now_str,
+                            result,
+                            failure_code,
+                            avg_fps,
+                            avg_latency_ms,
+                            bytes_sent,
+                            bytes_received,
+                            history_id,
+                        ),
+                    )
+            except sqlite3.Error:
+                pass
 
     def list_connection_history(self, limit: int = 50) -> list[ConnectionHistoryRecord]:
         cursor = self.conn.execute(
@@ -376,4 +385,10 @@ class DualDeskDB:
             self.conn.execute("DELETE FROM connection_history")
 
     def close(self) -> None:
-        self.conn.close()
+        with self._lock:
+            if not self._closed:
+                self._closed = True
+                try:
+                    self.conn.close()
+                except sqlite3.Error:
+                    pass

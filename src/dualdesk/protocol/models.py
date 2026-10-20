@@ -57,6 +57,10 @@ class MessageType(str, Enum):
     INPUT_KEY = "input.key"
     INPUT_RELEASE_ALL = "input.release_all"
 
+    # Audio streaming
+    AUDIO_CONFIG = "audio.config"
+    AUDIO_FRAME = "audio.frame"
+
     # Telemetry
     TELEMETRY_STATS = "telemetry.stats"
     TELEMETRY_WARNING = "telemetry.warning"
@@ -213,6 +217,25 @@ class KeyPayload:
 @dataclass
 class ReleaseAllPayload:
     reason: str = "session_reset"
+
+
+@dataclass
+class AudioConfigPayload:
+    sample_rate: int = 48000
+    channels: int = 2
+    bits_per_sample: int = 16
+    codec: str = "pcm_s16le"
+    enabled: bool = True
+
+
+@dataclass
+class AudioFramePayload:
+    sequence: int
+    timestamp_us: int
+    data_b64: str
+    sample_rate: int = 48000
+    channels: int = 2
+    rms_volume: float = 0.0
 
 
 @dataclass

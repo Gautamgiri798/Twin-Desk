@@ -168,5 +168,6 @@ def test_connection_manager_broadcast_latency_tracking() -> None:
         finally:
             client_cm.disconnect()
             host_cm.stop_control_server()
+            time.sleep(0.1)
             client_cm.db.close()
             host_cm.db.close()

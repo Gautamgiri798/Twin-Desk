@@ -8,12 +8,14 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from dualdesk.audio.capture import AudioCaptureAdapter, AudioFrame, AudioPlayerAdapter
 from dualdesk.display.adaptive import AdaptiveRateController
 from dualdesk.display.input_injector import InputInjector
 from dualdesk.protocol.models import (
+    AudioFramePayload,
     ButtonPayload,
     ErrorCode,
     KeyPayload,
@@ -100,10 +102,13 @@ class ConnectionManager:
         tls_key_path: Path | None = None,
         tls_expected_fingerprint: str | None = None,
         adaptive_controller: AdaptiveRateController | None = None,
+        audio_capture: AudioCaptureAdapter | None = None,
+        audio_player: AudioPlayerAdapter | None = None,
         on_state_changed: Callable[[ConnectionState, str], None] | None = None,
         on_telemetry_updated: Callable[[SessionTelemetry], None] | None = None,
         on_frame_received: Callable[[bytes], None] | None = None,
         on_frame_sent: Callable[[float, int], None] | None = None,
+        on_audio_received: Callable[[AudioFrame], None] | None = None,
     ) -> None:
         self.db = db
         self.pairing_manager = pairing_manager
@@ -116,10 +121,13 @@ class ConnectionManager:
         self.tls_key_path = tls_key_path
         self.tls_expected_fingerprint = tls_expected_fingerprint
         self.adaptive_controller = adaptive_controller
+        self.audio_capture = audio_capture
+        self.audio_player = audio_player
         self.on_state_changed = on_state_changed
         self.on_telemetry_updated = on_telemetry_updated
         self.on_frame_received = on_frame_received
         self.on_frame_sent = on_frame_sent
+        self.on_audio_received = on_audio_received
 
         self.last_send_latency_ms: float = 0.0
         self._tls_server_context: ssl.SSLContext | None = None
@@ -412,8 +420,46 @@ class ConnectionManager:
                         buttons=release_info.get("released_buttons"),
                     )
 
+        elif msg_type == MessageType.AUDIO_FRAME.value:
+            self._handle_incoming_audio(env)
+
         elif msg_type == MessageType.SESSION_STOP.value:
             self.disconnect(reason="Remote peer disconnected")
+
+    def _handle_incoming_audio(self, env: MessageEnvelope) -> None:
+        try:
+            payload = AudioFramePayload(
+                sequence=int(env.payload.get("sequence", 0)),
+                timestamp_us=int(env.payload.get("timestamp_us", 0)),
+                data_b64=str(env.payload.get("data_b64", "")),
+                sample_rate=int(env.payload.get("sample_rate", 48000)),
+                channels=int(env.payload.get("channels", 2)),
+                rms_volume=float(env.payload.get("rms_volume", 0.0)),
+            )
+            frame = AudioFrame.from_payload(payload)
+            if self.audio_player:
+                self.audio_player.enqueue_frame(frame)
+            if self.on_audio_received:
+                self.on_audio_received(frame)
+        except (ValueError, KeyError):
+            pass
+
+    def broadcast_audio_frame(self, frame: AudioFrame) -> bool:
+        """Streams an audio frame to the connected peer over the control channel."""
+        sock = self._active_client_sock or self._client_sock
+        if not sock:
+            return False
+        env = MessageEnvelope(
+            type=MessageType.AUDIO_FRAME.value,
+            session_id=self.active_session_id or "",
+            sequence=frame.sequence,
+            payload=asdict(frame.to_payload()),
+        )
+        try:
+            _send_envelope(sock, env)
+            return True
+        except OSError:
+            return False
 
     # Host Media Streaming Server
     def start_media_server(self, host: str = "", port: int = DEFAULT_MEDIA_PORT) -> None:
@@ -692,6 +738,8 @@ class ConnectionManager:
                         if env.type == MessageType.SESSION_STOP.value:
                             self.disconnect(reason="Host disconnected")
                             return
+                        elif env.type == MessageType.AUDIO_FRAME.value:
+                            self._handle_incoming_audio(env)
                     except ProtocolError:
                         continue
         except OSError:

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dualdesk.audio.capture import AudioCaptureAdapter, AudioPlayerAdapter
 from dualdesk.diagnostics.bundle import DiagnosticBundleGenerator
 from dualdesk.display.adaptive import AdaptiveRateController
 from dualdesk.display.capture import ScreenCaptureAdapter
@@ -84,6 +85,9 @@ class DualDeskApp(QMainWindow):
             adaptive_controller=self.adaptive_controller,
         )
 
+        self.audio_capture = AudioCaptureAdapter()
+        self.audio_player = AudioPlayerAdapter()
+
         self._stream_window: StreamWindow | None = None
         cert_path, key_path, _ = get_or_create_tls_credentials(
             self.db.db_path.parent, self.identity.device_id
@@ -96,6 +100,8 @@ class DualDeskApp(QMainWindow):
             tls_cert_path=cert_path,
             tls_key_path=key_path,
             adaptive_controller=self.adaptive_controller,
+            audio_capture=self.audio_capture,
+            audio_player=self.audio_player,
             on_state_changed=self._on_connection_state_changed,
             on_telemetry_updated=self._on_telemetry_updated,
             on_frame_received=self._on_stream_frame_received,
