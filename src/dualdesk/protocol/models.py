@@ -278,10 +278,10 @@ class MessageEnvelope:
     def deserialize(cls, json_str: str) -> MessageEnvelope:
         try:
             raw = json.loads(json_str)
-        except Exception as e:
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
             raise ProtocolError(
                 ErrorCode.UNSUPPORTED_PROTOCOL, f"Invalid JSON payload: {e}"
-            )
+            ) from e
         if not isinstance(raw, dict):
             raise ProtocolError(
                 ErrorCode.UNSUPPORTED_PROTOCOL, "Envelope must be a JSON object"

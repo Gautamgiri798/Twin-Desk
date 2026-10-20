@@ -92,9 +92,8 @@ def check_virtual_display_driver() -> DisplayDriverStatus:
                 if mon_dev.DeviceString:
                     detected_monitors.append(f"{dev.DeviceName}: {mon_dev.DeviceString}")
                 mon_idx += 1
-
             i += 1
-    except Exception as e:
+    except (AttributeError, OSError, TypeError) as e:
         return DisplayDriverStatus(
             is_installed=False,
             is_active=False,

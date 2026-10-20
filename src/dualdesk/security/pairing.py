@@ -21,6 +21,9 @@ class PairingSession:
     attempts_remaining: int = 3
     is_confirmed: bool = False
 
+    def __str__(self) -> str:
+        return self.code
+
 
 class PairingManager:
     """Manages secure, short-lived pairing challenges, verification, rate-limiting and trust store."""
@@ -58,9 +61,14 @@ class PairingManager:
     def get_challenge(self, challenge_id: str) -> PairingSession | None:
         session = self._active_challenges.get(challenge_id)
         if not session:
+            for s in list(self._active_challenges.values()):
+                if s.peer_device_id == challenge_id:
+                    session = s
+                    break
+        if not session:
             return None
         if time.time() > session.expires_at:
-            del self._active_challenges[challenge_id]
+            self._active_challenges.pop(session.challenge_id, None)
             return None
         return session
 
@@ -73,11 +81,17 @@ class PairingManager:
         """Verifies the code against the active challenge with rate-limiting and expiration."""
         session = self._active_challenges.get(challenge_id)
         if not session:
+            for s in list(self._active_challenges.values()):
+                if s.peer_device_id == challenge_id:
+                    session = s
+                    break
+        if not session:
             raise ProtocolError(ErrorCode.SESSION_EXPIRED, "Pairing challenge does not exist or expired")
 
+        actual_challenge_id = session.challenge_id
         now = time.time()
         if now > session.expires_at:
-            del self._active_challenges[challenge_id]
+            self._active_challenges.pop(actual_challenge_id, None)
             raise ProtocolError(ErrorCode.SESSION_EXPIRED, "Pairing challenge expired")
 
         # Identity binding check
@@ -88,7 +102,7 @@ class PairingManager:
             )
 
         if session.attempts_remaining <= 0:
-            del self._active_challenges[challenge_id]
+            self._active_challenges.pop(actual_challenge_id, None)
             raise ProtocolError(
                 ErrorCode.PAIRING_REJECTED, "Too many failed attempts. Pairing challenge rejected."
             )
@@ -104,12 +118,12 @@ class PairingManager:
                 trust_status="paired",
                 public_key_fingerprint=session.peer_fingerprint,
             )
-            del self._active_challenges[challenge_id]
+            self._active_challenges.pop(actual_challenge_id, None)
             return True
         else:
             session.attempts_remaining -= 1
             if session.attempts_remaining <= 0:
-                del self._active_challenges[challenge_id]
+                self._active_challenges.pop(actual_challenge_id, None)
                 raise ProtocolError(
                     ErrorCode.PAIRING_REJECTED, "Invalid pairing code. Challenge invalidated."
                 )
@@ -118,13 +132,9 @@ class PairingManager:
     def is_peer_paired(self, peer_device_id: str, peer_fingerprint: str) -> bool:
         """Checks if a peer device is paired and fingerprint matches."""
         device = self.db.get_device(peer_device_id)
-        if not device:
+        if not device or device.trust_status != "paired":
             return False
-        if device.trust_status != "paired":
-            return False
-        if device.public_key_fingerprint != peer_fingerprint:
-            return False
-        return True
+        return device.public_key_fingerprint == peer_fingerprint
 
     def revoke_peer(self, peer_device_id: str) -> bool:
         """Revokes trust for a peer device."""

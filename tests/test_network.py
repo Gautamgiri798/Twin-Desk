@@ -99,3 +99,112 @@ def test_capture_adapter_metrics():
 
     adapter.stop_capture()
     assert not adapter.is_capturing
+
+
+def test_pairing_manager_peer_id_fallback():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = DualDeskDB(Path(tmp_dir) / "test.db")
+        pm = PairingManager(db, local_fingerprint="SHA256:LOCAL")
+        session = pm.create_challenge(
+            peer_device_id="peer-device-xyz",
+            peer_name="Remote Laptop",
+            peer_fingerprint="SHA256:PEER",
+        )
+
+        # Lookup by peer_device_id fallback
+        found = pm.get_challenge("peer-device-xyz")
+        assert found is not None
+        assert found.challenge_id == session.challenge_id
+
+        # Verify using peer_device_id fallback
+        verified = pm.verify_code("peer-device-xyz", session.code, "SHA256:PEER")
+        assert verified
+        assert pm.is_peer_paired("peer-device-xyz", "SHA256:PEER")
+        db.close()
+
+
+def test_tcp_control_channel_pairing_and_session():
+    import time
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        host_db = DualDeskDB(Path(tmp_dir) / "host.db")
+        host_pm = PairingManager(host_db, local_fingerprint="SHA256:HOST-FP")
+        host_cm = ConnectionManager(db=host_db, pairing_manager=host_pm, role="host", control_port=53992)
+        host_cm.start_control_server(host="127.0.0.1", port=53992)
+
+        client_db = DualDeskDB(Path(tmp_dir) / "client.db")
+        client_pm = PairingManager(client_db, local_fingerprint="SHA256:CLIENT-FP")
+        client_cm = ConnectionManager(db=client_db, pairing_manager=client_pm, role="client")
+
+        time.sleep(0.1)  # Allow socket to bind
+
+        try:
+            # 1. Unpaired connect should be rejected
+            connect_ok = client_cm.connect_to_host(
+                host_address="127.0.0.1",
+                port=53992,
+                client_device_id="client-pc-01",
+                client_fingerprint="SHA256:CLIENT-FP",
+            )
+            assert not connect_ok
+            assert client_cm.state == ConnectionState.ERROR
+
+            # 2. Pairing with invalid code fails
+            pair_wrong = client_cm.pair_with_host(
+                host_address="127.0.0.1",
+                port=53992,
+                client_device_id="client-pc-01",
+                client_name="Client PC",
+                client_fingerprint="SHA256:CLIENT-FP",
+                code="000000",
+            )
+            assert not pair_wrong
+
+            # 3. Successful pairing over TCP
+            pair_ok = client_cm.pair_with_host(
+                host_address="127.0.0.1",
+                port=53992,
+                client_device_id="client-pc-01",
+                client_name="Client PC",
+                client_fingerprint="SHA256:CLIENT-FP",
+                code=None,  # Auto-submits challenge code received
+            )
+            assert pair_ok
+            assert host_pm.is_peer_paired("client-pc-01", "SHA256:CLIENT-FP")
+
+            # 4. Connect now succeeds over TCP control channel
+            session_ok = client_cm.connect_to_host(
+                host_address="127.0.0.1",
+                port=53992,
+                client_device_id="client-pc-01",
+                client_fingerprint="SHA256:CLIENT-FP",
+            )
+            assert session_ok
+            assert client_cm.state == ConnectionState.STREAMING
+            time.sleep(0.2)
+            assert host_cm.state == ConnectionState.STREAMING
+            assert host_cm.input_filter is not None
+
+            # 5. Over-the-wire input forwarding
+            client_cm.send_pointer(800, 600)
+            client_cm.send_button("left", pressed=True)
+            client_cm.send_key(65, "A", pressed=True)
+            time.sleep(0.2)
+            assert host_cm.input_filter.has_held_inputs
+
+            # 6. Release all inputs
+            client_cm.send_release_all()
+            time.sleep(0.2)
+            assert not host_cm.input_filter.has_held_inputs
+
+            # 7. Disconnect cleanly
+            client_cm.disconnect()
+            time.sleep(0.2)
+            assert client_cm.state == ConnectionState.DISCONNECTED
+            assert host_cm.state == ConnectionState.DISCONNECTED
+
+        finally:
+            host_cm.stop_control_server()
+            host_db.close()
+            client_db.close()
+

@@ -30,6 +30,7 @@ from dualdesk.display.capture import ScreenCaptureAdapter
 from dualdesk.display.driver import check_virtual_display_driver, get_supported_modes
 from dualdesk.network.discovery import DiscoveredDevice, DiscoveryBeacon, DiscoveryService
 from dualdesk.network.transport import ConnectionManager, ConnectionState, SessionTelemetry
+from dualdesk.protocol.models import ProtocolError
 from dualdesk.security.identity import DeviceIdentity, get_or_create_device_identity
 from dualdesk.security.pairing import PairingManager
 from dualdesk.storage.db import DualDeskDB
@@ -85,6 +86,8 @@ class DualDeskApp(QMainWindow):
             on_state_changed=self._on_connection_state_changed,
             on_telemetry_updated=self._on_telemetry_updated,
         )
+        if self.role == "host":
+            self.connection_manager.start_control_server()
 
         self.diagnostics_gen = DiagnosticBundleGenerator(self.db)
 
@@ -505,6 +508,11 @@ class DualDeskApp(QMainWindow):
         self.role = new_role
         self.db.set_setting("role", new_role)
         self.beacon.role = new_role
+        self.connection_manager.role = new_role
+        if new_role == "host":
+            self.connection_manager.start_control_server()
+        else:
+            self.connection_manager.stop_control_server()
 
     def _toggle_connection(self) -> None:
         if self.connection_manager.state == ConnectionState.STREAMING:
@@ -523,17 +531,17 @@ class DualDeskApp(QMainWindow):
                 )
                 if res == QMessageBox.StandardButton.Yes:
                     test_dev_id = "test-client-01"
-                    code = self.connection_manager.start_pairing(
+                    challenge = self.connection_manager.start_pairing(
                         peer_device_id=test_dev_id,
                         peer_name="Test Client PC",
                         peer_fingerprint="SHA256:TEST-0000-1111-2222",
                     )
-                    diag = PairingDialog("Test Client PC", test_dev_id, code, self)
+                    diag = PairingDialog("Test Client PC", challenge.challenge_id, challenge.code, self)
                     if diag.exec():
                         submitted = diag.get_submitted_code()
                         # Auto verify
                         self.connection_manager.confirm_pairing(
-                            challenge_id=test_dev_id,
+                            challenge_id=challenge.challenge_id,
                             code=submitted,
                             peer_fingerprint="SHA256:TEST-0000-1111-2222",
                         )
@@ -634,23 +642,23 @@ class DualDeskApp(QMainWindow):
             self.paired_table.setCellWidget(row, 3, action_widget)
 
     def _pair_discovered_device(self, dev: DiscoveredDevice) -> None:
-        code = self.connection_manager.start_pairing(
+        challenge = self.connection_manager.start_pairing(
             peer_device_id=dev.device_id,
             peer_name=dev.display_name,
             peer_fingerprint=dev.fingerprint,
         )
-        diag = PairingDialog(dev.display_name, dev.device_id, code, self)
+        diag = PairingDialog(dev.display_name, challenge.challenge_id, challenge.code, self)
         if diag.exec():
             sub = diag.get_submitted_code()
             try:
                 self.connection_manager.confirm_pairing(
-                    challenge_id=dev.device_id,
+                    challenge_id=challenge.challenge_id,
                     code=sub,
                     peer_fingerprint=dev.fingerprint,
                 )
                 QMessageBox.information(self, "Success", f"Paired with {dev.display_name}!")
                 self._refresh_devices_table()
-            except Exception as e:
+            except ProtocolError as e:
                 QMessageBox.warning(self, "Pairing Failed", str(e))
 
     def _revoke_device(self, device_id: str) -> None:
@@ -702,6 +710,7 @@ class DualDeskApp(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.discovery.stop()
+        self.connection_manager.stop_control_server()
         self.connection_manager.disconnect(reason="App closed")
         self.db.close()
         event.accept()

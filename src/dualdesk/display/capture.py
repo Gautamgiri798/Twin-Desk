@@ -94,7 +94,7 @@ class ScreenCaptureAdapter:
                 gdi32.DeleteDC(hdc_mem)
                 user32.ReleaseDC(hdesktop, hdc_screen)
                 frame_data = b"\x01" * 1024
-            except Exception:
+            except (AttributeError, OSError, TypeError):
                 frame_data = b"\x00" * 1024
         else:
             frame_data = b"\x00" * 1024

@@ -143,8 +143,10 @@ class DiscoveryService:
                 env = self.beacon.to_envelope()
                 msg = env.serialize().encode("utf-8")
                 sock.sendto(msg, ("<broadcast>", self.broadcast_port))
-            except Exception:
-                pass
+            except OSError:
+                # Network interface may be offline or broadcast restricted
+                time.sleep(self.BROADCAST_INTERVAL)
+                continue
             time.sleep(self.BROADCAST_INTERVAL)
 
         sock.close()
@@ -154,7 +156,7 @@ class DiscoveryService:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind(("", self.broadcast_port))
-        except Exception:
+        except OSError:
             # If port is occupied or permission denied
             return
         sock.settimeout(1.0)
@@ -193,7 +195,8 @@ class DiscoveryService:
                     self.on_device_discovered(dev)
             except TimeoutError:
                 continue
-            except Exception:
-                pass
+            except (OSError, UnicodeDecodeError):
+                # Ignore non-fatal network receive and encoding errors
+                continue
 
         sock.close()

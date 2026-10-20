@@ -157,7 +157,7 @@ class DualDeskDB:
             return default
         try:
             return json.loads(row["value_json"])
-        except Exception:
+        except (json.JSONDecodeError, TypeError):
             return default
 
     # Devices operations
