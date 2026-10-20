@@ -1,6 +1,7 @@
 #include "Direct3DDevice.h"
 
-namespace DualDesk::Driver {
+namespace DualDesk {
+namespace Driver {
 
 Direct3DDevice::Direct3DDevice() = default;
 Direct3DDevice::~Direct3DDevice() = default;
@@ -28,4 +29,5 @@ bool Direct3DDevice::Initialize() {
     return SUCCEEDED(hr);
 }
 
-} // namespace DualDesk::Driver
+} // namespace Driver
+} // namespace DualDesk

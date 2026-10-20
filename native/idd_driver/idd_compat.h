@@ -163,8 +163,54 @@
       return STATUS_SUCCESS;
   }
 
-  struct IDARG_IN_QUERYTARGETMODES {};
-  struct IDARG_OUT_QUERYTARGETMODES {};
+  #ifndef DISPLAYCONFIG_RATIONAL
+  struct DISPLAYCONFIG_RATIONAL {
+      unsigned int Numerator;
+      unsigned int Denominator;
+  };
+  #endif
+
+  #ifndef DISPLAYCONFIG_2DREGION
+  struct DISPLAYCONFIG_2DREGION {
+      unsigned int cx;
+      unsigned int cy;
+  };
+  #endif
+
+  #ifndef DISPLAYCONFIG_VIDEO_SIGNAL_INFO
+  struct DISPLAYCONFIG_VIDEO_SIGNAL_INFO {
+      unsigned long long pixelRate;
+      DISPLAYCONFIG_RATIONAL hSyncFreq;
+      DISPLAYCONFIG_RATIONAL vSyncFreq;
+      DISPLAYCONFIG_2DREGION activeSize;
+      DISPLAYCONFIG_2DREGION totalSize;
+      unsigned int videoStandard;
+      unsigned int scanLineOrdering;
+  };
+  #endif
+
+  #ifndef DISPLAYCONFIG_TARGET_MODE
+  struct DISPLAYCONFIG_TARGET_MODE {
+      DISPLAYCONFIG_VIDEO_SIGNAL_INFO targetVideoSignalInfo;
+  };
+  #endif
+
+  struct IDDCX_TARGET_MODE {
+      unsigned int Size;
+      DISPLAYCONFIG_TARGET_MODE TargetMode;
+      unsigned int RequiredBandwidth;
+  };
+
+  struct IDARG_IN_QUERYTARGETMODES {
+      IDDCX_MONITOR_DESCRIPTION MonitorDescription;
+      unsigned int TargetModeBufferInputCount;
+      IDDCX_TARGET_MODE* pTargetModes;
+  };
+
+  struct IDARG_OUT_QUERYTARGETMODES {
+      unsigned int TargetModeBufferOutputCount;
+  };
+
   struct IDARG_IN_SETSWAPCHAIN {};
 
   typedef NTSTATUS EVT_IDD_CX_MONITOR_QUERY_TARGET_MODES(

@@ -4,7 +4,8 @@
 
 using Microsoft::WRL::ComPtr;
 
-namespace DualDesk::Driver {
+namespace DualDesk {
+namespace Driver {
 
 class Direct3DDevice {
 public:
@@ -20,4 +21,5 @@ private:
     ComPtr<ID3D11DeviceContext> m_context;
 };
 
-} // namespace DualDesk::Driver
+} // namespace Driver
+} // namespace DualDesk

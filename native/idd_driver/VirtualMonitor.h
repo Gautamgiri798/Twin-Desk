@@ -2,7 +2,8 @@
 
 #include "idd_compat.h"
 
-namespace DualDesk::Driver {
+namespace DualDesk {
+namespace Driver {
 
 NTSTATUS CreateVirtualMonitor(IDDCX_ADAPTER adapter);
 
@@ -21,4 +22,5 @@ extern "C" {
     );
 }
 
-} // namespace DualDesk::Driver
+} // namespace Driver
+} // namespace DualDesk

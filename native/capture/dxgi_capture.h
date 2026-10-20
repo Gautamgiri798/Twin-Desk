@@ -1,13 +1,11 @@
 #pragma once
 
-#include <cstdint>
-#include <vector>
-#include <memory>
 #include "dxgi_compat.h"
 
 using Microsoft::WRL::ComPtr;
 
-namespace DualDesk::Capture {
+namespace DualDesk {
+namespace Capture {
 
 struct FrameInfo {
     uint32_t width{ 0 };
@@ -39,4 +37,6 @@ private:
     ComPtr<ID3D11Texture2D> m_staging_texture;
 };
 
-} // namespace DualDesk::Capture
+} // namespace Capture
+} // namespace DualDesk
+

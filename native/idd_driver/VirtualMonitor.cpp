@@ -1,7 +1,7 @@
 #include "VirtualMonitor.h"
-#include "Direct3DDevice.h"
 
-namespace DualDesk::Driver {
+namespace DualDesk {
+namespace Driver {
 
 // Standard EDID block reporting 1080p and 1440p support
 static const BYTE s_VirtualMonitorEdidBlock[128] = {
@@ -12,7 +12,7 @@ static const BYTE s_VirtualMonitorEdidBlock[128] = {
     0x0F, 0x50, 0x54, 0x21, 0x08, 0x00, 0xD1, 0xC0, 
     0x81, 0xC0, 0x81, 0x00, 0x95, 0x00, 0xB3, 0x00, 
     0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x3A, 
-    0x80, 0x18, 0x71, 0x38, 0x2D, 0x40, 0x58, 0x2C, // 1920x1080@60Hz detailed timing descriptor
+    0x80, 0x18, 0x71, 0x38, 0x2D, 0x40, 0x58, 0x2C, // 1920x1080 detailed timing descriptor
     0x45, 0x00, 0x09, 0x25, 0x21, 0x00, 0x00, 0x1E, 
     0x00, 0x00, 0x00, 0xFC, 0x00, 0x44, 0x75, 0x61, 
     0x6C, 0x44, 0x65, 0x73, 0x6B, 0x20, 0x56, 0x4D, 
@@ -20,7 +20,7 @@ static const BYTE s_VirtualMonitorEdidBlock[128] = {
     0x4C, 0x1E, 0x53, 0x11, 0x00, 0x0A, 0x20, 0x20, 
     0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0x10, 
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17  // Checksum
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6C  // EDID 1.4 Checksum byte (sum mod 256 == 0)
 };
 
 NTSTATUS CreateVirtualMonitor(IDDCX_ADAPTER adapter) {
@@ -58,8 +58,37 @@ NTSTATUS EvtMonitorQueryTargetModes(
     _Out_ IDARG_OUT_QUERYTARGETMODES* pOutArgs
 ) {
     UNREFERENCED_PARAMETER(MonitorObject);
-    UNREFERENCED_PARAMETER(pInArgs);
-    UNREFERENCED_PARAMETER(pOutArgs);
+
+    // Provide standard target display modes:
+    // Mode 0: 1920x1080 @ 60Hz
+    // Mode 1: 2560x1440 @ 60Hz
+    constexpr unsigned int MODE_COUNT = 2;
+    if (pOutArgs) {
+        pOutArgs->TargetModeBufferOutputCount = MODE_COUNT;
+    }
+
+    if (pInArgs && pInArgs->TargetModeBufferInputCount >= MODE_COUNT && pInArgs->pTargetModes != nullptr) {
+        // Mode 0: 1920x1080 @ 60Hz
+        pInArgs->pTargetModes[0].Size = sizeof(IDDCX_TARGET_MODE);
+        pInArgs->pTargetModes[0].TargetMode.targetVideoSignalInfo.activeSize.cx = 1920;
+        pInArgs->pTargetModes[0].TargetMode.targetVideoSignalInfo.activeSize.cy = 1080;
+        pInArgs->pTargetModes[0].TargetMode.targetVideoSignalInfo.totalSize.cx = 2200;
+        pInArgs->pTargetModes[0].TargetMode.targetVideoSignalInfo.totalSize.cy = 1125;
+        pInArgs->pTargetModes[0].TargetMode.targetVideoSignalInfo.vSyncFreq.Numerator = 60;
+        pInArgs->pTargetModes[0].TargetMode.targetVideoSignalInfo.vSyncFreq.Denominator = 1;
+        pInArgs->pTargetModes[0].TargetMode.targetVideoSignalInfo.pixelRate = 148500000;
+
+        // Mode 1: 2560x1440 @ 60Hz
+        pInArgs->pTargetModes[1].Size = sizeof(IDDCX_TARGET_MODE);
+        pInArgs->pTargetModes[1].TargetMode.targetVideoSignalInfo.activeSize.cx = 2560;
+        pInArgs->pTargetModes[1].TargetMode.targetVideoSignalInfo.activeSize.cy = 1440;
+        pInArgs->pTargetModes[1].TargetMode.targetVideoSignalInfo.totalSize.cx = 2720;
+        pInArgs->pTargetModes[1].TargetMode.targetVideoSignalInfo.totalSize.cy = 1480;
+        pInArgs->pTargetModes[1].TargetMode.targetVideoSignalInfo.vSyncFreq.Numerator = 60;
+        pInArgs->pTargetModes[1].TargetMode.targetVideoSignalInfo.vSyncFreq.Denominator = 1;
+        pInArgs->pTargetModes[1].TargetMode.targetVideoSignalInfo.pixelRate = 241500000;
+    }
+
     return STATUS_SUCCESS;
 }
 
@@ -79,4 +108,5 @@ NTSTATUS EvtMonitorUnassignSwapChain(
     return STATUS_SUCCESS;
 }
 
-} // namespace DualDesk::Driver
+} // namespace Driver
+} // namespace DualDesk

@@ -35,4 +35,13 @@ if (WIN32)
     target_link_libraries(dualdesk_capture PRIVATE d3d11 dxgi)
 endif()
 
+# Build IDD driver shared library (User-Mode Driver DLL)
+add_library(dualdesk_idd SHARED ${DRIVER_SOURCES})
+target_include_directories(dualdesk_idd PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/idd_driver ${CMAKE_CURRENT_SOURCE_DIR}/capture)
+
+if (WIN32)
+    target_link_libraries(dualdesk_idd PRIVATE d3d11 dxgi)
+endif()
+
 message(STATUS "Configured DualDesk Native components")
+

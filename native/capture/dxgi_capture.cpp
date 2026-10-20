@@ -1,6 +1,7 @@
 #include "dxgi_capture.h"
 
-namespace DualDesk::Capture {
+namespace DualDesk {
+namespace Capture {
 
 DXGICapture::DXGICapture() = default;
 
@@ -60,7 +61,7 @@ bool DXGICapture::Initialize(uint32_t output_index) {
 }
 
 bool DXGICapture::AcquireNextFrame(FrameInfo& out_frame, uint32_t timeout_ms) {
-    if (!m_initialized || !m_output_duplication) return false;
+    if (!m_initialized || !m_output_duplication || !m_d3d_device || !m_d3d_context) return false;
 
     DXGI_OUTDUPL_FRAME_INFO frame_info{};
     ComPtr<IDXGIResource> desktop_resource;
@@ -85,12 +86,56 @@ bool DXGICapture::AcquireNextFrame(FrameInfo& out_frame, uint32_t timeout_ms) {
     D3D11_TEXTURE2D_DESC desc{};
     desktop_texture->GetDesc(&desc);
 
-    out_frame.width = desc.Width;
-    out_frame.height = desc.Height;
-    out_frame.timestamp_us = static_cast<uint64_t>(frame_info.LastPresentTime.QuadPart);
+    // Create staging texture if not yet allocated or if screen dimensions have changed
+    if (!m_staging_texture) {
+        D3D11_TEXTURE2D_DESC staging_desc = desc;
+        staging_desc.BindFlags = 0;
+        staging_desc.MiscFlags = 0;
+        staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        staging_desc.Usage = D3D11_USAGE_STAGING;
+        staging_desc.MipLevels = 1;
+        staging_desc.ArraySize = 1;
+
+        hr = m_d3d_device->CreateTexture2D(&staging_desc, nullptr, m_staging_texture.ReleaseAndGetAddressOf());
+        if (FAILED(hr)) {
+            m_output_duplication->ReleaseFrame();
+            return false;
+        }
+    }
+
+    // Copy captured desktop GPU texture into CPU-readable staging texture
+    m_d3d_context->CopyResource(
+        static_cast<ID3D11Resource*>(m_staging_texture.Get()),
+        static_cast<ID3D11Resource*>(desktop_texture.Get())
+    );
+
+    // Map staging texture memory for CPU read access
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    hr = m_d3d_context->Map(
+        static_cast<ID3D11Resource*>(m_staging_texture.Get()),
+        0,
+        D3D11_MAP_READ,
+        0,
+        &mapped
+    );
+
+    if (SUCCEEDED(hr)) {
+        out_frame.width = desc.Width;
+        out_frame.height = desc.Height;
+        out_frame.pitch = mapped.RowPitch;
+        out_frame.timestamp_us = static_cast<uint64_t>(frame_info.LastPresentTime.QuadPart);
+
+        size_t total_bytes = static_cast<size_t>(mapped.RowPitch) * desc.Height;
+        out_frame.buffer.resize(total_bytes);
+        if (mapped.pData && total_bytes > 0) {
+            std::memcpy(out_frame.buffer.data(), mapped.pData, total_bytes);
+        }
+
+        m_d3d_context->Unmap(static_cast<ID3D11Resource*>(m_staging_texture.Get()), 0);
+    }
 
     m_output_duplication->ReleaseFrame();
-    return true;
+    return SUCCEEDED(hr);
 }
 
 void DXGICapture::ReleaseFrame() {
@@ -107,4 +152,5 @@ void DXGICapture::Cleanup() {
     m_initialized = false;
 }
 
-} // namespace DualDesk::Capture
+} // namespace Capture
+} // namespace DualDesk
