@@ -933,7 +933,9 @@ class ConnectionManager:
             raise ProtocolError(ErrorCode.INPUT_REJECTED, "Session is not active")
         coords = self.input_filter.process_pointer(payload, sequence)
         if coords and self.input_injector:
-            self.input_injector.inject_pointer(coords[0], coords[1])
+            self.input_injector.inject_pointer(
+                coords[0], coords[1], normalized=payload.normalized
+            )
         return coords
 
     def handle_incoming_button(

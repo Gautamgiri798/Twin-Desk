@@ -20,20 +20,30 @@ from dualdesk.display.encoder import (
     VideoEncoderAdapter,
     detect_encoder_capabilities,
 )
+from dualdesk.display.input_injector import InputInjector
+from dualdesk.display.multimonitor import (
+    CursorWarpController,
+    DisplayGeometry,
+    VirtualDesktopLayout,
+)
 
 __all__ = [
     "CaptureStats",
+    "CursorWarpController",
     "DecodedVideoFrame",
     "DecoderBackend",
     "DisplayDriverStatus",
+    "DisplayGeometry",
     "EncodedVideoPacket",
     "EncoderBackend",
     "EncoderCapabilities",
     "EncoderConfig",
+    "InputInjector",
     "ScreenCaptureAdapter",
     "VideoCodec",
     "VideoDecoderAdapter",
     "VideoEncoderAdapter",
+    "VirtualDesktopLayout",
     "check_virtual_display_driver",
     "detect_encoder_capabilities",
     "get_supported_modes",
