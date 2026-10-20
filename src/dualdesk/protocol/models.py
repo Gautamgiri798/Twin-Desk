@@ -56,10 +56,15 @@ class MessageType(str, Enum):
     INPUT_BUTTON = "input.button"
     INPUT_KEY = "input.key"
     INPUT_RELEASE_ALL = "input.release_all"
+    INPUT_TOUCH = "input.touch"
+    INPUT_GESTURE = "input.gesture"
 
     # Audio streaming
     AUDIO_CONFIG = "audio.config"
     AUDIO_FRAME = "audio.frame"
+
+    # Clipboard
+    CLIPBOARD_UPDATE = "clipboard.update"
 
     # Telemetry
     TELEMETRY_STATS = "telemetry.stats"
@@ -219,6 +224,47 @@ class ReleaseAllPayload:
     reason: str = "session_reset"
 
 
+class TouchAction(str, Enum):
+    DOWN = "down"
+    MOVE = "move"
+    UP = "up"
+    CANCEL = "cancel"
+
+
+@dataclass
+class TouchPoint:
+    id: int
+    x: float
+    y: float
+    pressure: float = 1.0
+    normalized: bool = True
+
+
+@dataclass
+class TouchPayload:
+    action: str  # "down", "move", "up", "cancel"
+    contacts: list[TouchPoint] = field(default_factory=list)
+
+
+class GestureType(str, Enum):
+    PAN = "pan"
+    PINCH = "pinch"
+    TAP = "tap"
+    DOUBLE_TAP = "double_tap"
+    TWO_FINGER_TAP = "two_finger_tap"
+
+
+@dataclass
+class GesturePayload:
+    gesture: str  # "pan", "pinch", "tap", "double_tap", "two_finger_tap"
+    x: float
+    y: float
+    delta_x: float = 0.0
+    delta_y: float = 0.0
+    scale: float = 1.0
+    normalized: bool = True
+
+
 @dataclass
 class AudioConfigPayload:
     sample_rate: int = 48000
@@ -258,6 +304,14 @@ class TelemetryWarningPayload:
 class TelemetryErrorPayload:
     error_code: str
     description: str
+
+
+@dataclass
+class ClipboardUpdatePayload:
+    text: str
+    format: str = "text/plain"
+    sender_device_id: str = ""
+    timestamp_us: int = 0
 
 
 @dataclass

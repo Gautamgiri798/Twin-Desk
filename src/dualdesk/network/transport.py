@@ -10,20 +10,27 @@ import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from dualdesk.audio.capture import AudioCaptureAdapter, AudioFrame, AudioPlayerAdapter
 from dualdesk.display.adaptive import AdaptiveRateController
+from dualdesk.display.clipboard import ClipboardAdapter
 from dualdesk.display.input_injector import InputInjector
 from dualdesk.protocol.models import (
     AudioFramePayload,
     ButtonPayload,
+    ClipboardUpdatePayload,
     ErrorCode,
+    GesturePayload,
     KeyPayload,
     MessageEnvelope,
     MessageType,
     PointerPayload,
     ProtocolError,
+    TouchPayload,
+    TouchPoint,
 )
+from dualdesk.security.clipboard_guard import ClipboardGuard
 from dualdesk.security.input_filter import InputFilter
 from dualdesk.security.pairing import PairingManager, PairingSession
 from dualdesk.security.tls import (
@@ -104,11 +111,14 @@ class ConnectionManager:
         adaptive_controller: AdaptiveRateController | None = None,
         audio_capture: AudioCaptureAdapter | None = None,
         audio_player: AudioPlayerAdapter | None = None,
+        clipboard_guard: ClipboardGuard | None = None,
+        clipboard_adapter: ClipboardAdapter | None = None,
         on_state_changed: Callable[[ConnectionState, str], None] | None = None,
         on_telemetry_updated: Callable[[SessionTelemetry], None] | None = None,
         on_frame_received: Callable[[bytes], None] | None = None,
         on_frame_sent: Callable[[float, int], None] | None = None,
         on_audio_received: Callable[[AudioFrame], None] | None = None,
+        on_clipboard_received: Callable[[str], None] | None = None,
     ) -> None:
         self.db = db
         self.pairing_manager = pairing_manager
@@ -123,11 +133,15 @@ class ConnectionManager:
         self.adaptive_controller = adaptive_controller
         self.audio_capture = audio_capture
         self.audio_player = audio_player
+        self.clipboard_guard = clipboard_guard or ClipboardGuard(enabled=True)
+        self.clipboard_adapter = clipboard_adapter or ClipboardAdapter()
+        self.clipboard_adapter.on_change = self._on_local_clipboard_changed
         self.on_state_changed = on_state_changed
         self.on_telemetry_updated = on_telemetry_updated
         self.on_frame_received = on_frame_received
         self.on_frame_sent = on_frame_sent
         self.on_audio_received = on_audio_received
+        self.on_clipboard_received = on_clipboard_received
 
         self.last_send_latency_ms: float = 0.0
         self._tls_server_context: ssl.SSLContext | None = None
@@ -418,10 +432,50 @@ class ConnectionManager:
                     self.input_injector.release_all(
                         keys=release_info.get("released_keys"),
                         buttons=release_info.get("released_buttons"),
+                        touches=release_info.get("released_touches"),
                     )
+
+        elif msg_type == MessageType.INPUT_TOUCH.value:
+            contacts_raw = env.payload.get("contacts", [])
+            contacts = [
+                TouchPoint(
+                    id=int(c.get("id", 0)),
+                    x=float(c.get("x", 0.0)),
+                    y=float(c.get("y", 0.0)),
+                    pressure=float(c.get("pressure", 1.0)),
+                    normalized=bool(c.get("normalized", True)),
+                )
+                for c in contacts_raw
+            ]
+            touch_payload = TouchPayload(
+                action=str(env.payload.get("action", "move")),
+                contacts=contacts,
+            )
+            self.handle_incoming_touch(touch_payload, env.sequence)
+
+        elif msg_type == MessageType.INPUT_GESTURE.value:
+            gesture_payload = GesturePayload(
+                gesture=str(env.payload.get("gesture", "pan")),
+                x=float(env.payload.get("x", 0.0)),
+                y=float(env.payload.get("y", 0.0)),
+                delta_x=float(env.payload.get("delta_x", 0.0)),
+                delta_y=float(env.payload.get("delta_y", 0.0)),
+                scale=float(env.payload.get("scale", 1.0)),
+                normalized=bool(env.payload.get("normalized", True)),
+            )
+            self.handle_incoming_gesture(gesture_payload, env.sequence)
 
         elif msg_type == MessageType.AUDIO_FRAME.value:
             self._handle_incoming_audio(env)
+
+        elif msg_type == MessageType.CLIPBOARD_UPDATE.value:
+            clip_payload = ClipboardUpdatePayload(
+                text=str(env.payload.get("text", "")),
+                format=str(env.payload.get("format", "text/plain")),
+                sender_device_id=str(env.payload.get("sender_device_id", "")),
+                timestamp_us=int(env.payload.get("timestamp_us", 0)),
+            )
+            self.handle_incoming_clipboard(clip_payload)
 
         elif msg_type == MessageType.SESSION_STOP.value:
             self.disconnect(reason="Remote peer disconnected")
@@ -808,6 +862,60 @@ class ConnectionManager:
         except OSError:
             pass
 
+    def send_touch(
+        self,
+        action: str,
+        contacts: list[TouchPoint] | list[dict[str, Any]],
+    ) -> None:
+        if not self._client_sock or self.state != ConnectionState.STREAMING:
+            return
+        self._sequence_counter += 1
+        contacts_data = [
+            asdict(c) if isinstance(c, TouchPoint) else c for c in contacts
+        ]
+        env = MessageEnvelope(
+            type=MessageType.INPUT_TOUCH.value,
+            session_id=self.active_session_id or "",
+            sequence=self._sequence_counter,
+            payload={"action": action, "contacts": contacts_data},
+        )
+        try:
+            _send_envelope(self._client_sock, env)
+        except OSError:
+            self.disconnect(reason="Send failed")
+
+    def send_gesture(
+        self,
+        gesture: str,
+        x: float,
+        y: float,
+        delta_x: float = 0.0,
+        delta_y: float = 0.0,
+        scale: float = 1.0,
+        normalized: bool = True,
+    ) -> None:
+        if not self._client_sock or self.state != ConnectionState.STREAMING:
+            return
+        self._sequence_counter += 1
+        env = MessageEnvelope(
+            type=MessageType.INPUT_GESTURE.value,
+            session_id=self.active_session_id or "",
+            sequence=self._sequence_counter,
+            payload={
+                "gesture": gesture,
+                "x": x,
+                "y": y,
+                "delta_x": delta_x,
+                "delta_y": delta_y,
+                "scale": scale,
+                "normalized": normalized,
+            },
+        )
+        try:
+            _send_envelope(self._client_sock, env)
+        except OSError:
+            self.disconnect(reason="Send failed")
+
     # Session Management
     def connect(
         self,
@@ -959,6 +1067,67 @@ class ConnectionManager:
         if self.input_filter.emergency_escape_triggered:
             self.disconnect(reason="Emergency escape shortcut triggered")
         return res
+
+    def handle_incoming_touch(
+        self, payload: TouchPayload, sequence: int
+    ) -> TouchPayload | None:
+        if self.state != ConnectionState.STREAMING or not self.input_filter:
+            raise ProtocolError(ErrorCode.INPUT_REJECTED, "Session is not active")
+        sanitized = self.input_filter.process_touch(payload, sequence)
+        if sanitized and self.input_injector:
+            self.input_injector.inject_touch(sanitized)
+        return sanitized
+
+    def handle_incoming_gesture(
+        self, payload: GesturePayload, sequence: int
+    ) -> GesturePayload | None:
+        if self.state != ConnectionState.STREAMING or not self.input_filter:
+            raise ProtocolError(ErrorCode.INPUT_REJECTED, "Session is not active")
+        sanitized = self.input_filter.process_gesture(payload, sequence)
+        if sanitized and self.input_injector:
+            self.input_injector.inject_gesture(sanitized)
+        return sanitized
+
+    def _on_local_clipboard_changed(self, text: str) -> None:
+        if self.state == ConnectionState.STREAMING and self.clipboard_guard.enabled:
+            self.send_clipboard_text(text)
+
+    def send_clipboard_text(self, text: str) -> bool:
+        """Sends sanitized text update to the peer over the TLS-encrypted control channel."""
+        sock = self._active_client_sock or self._client_sock
+        if not sock or self.state != ConnectionState.STREAMING:
+            return False
+        if not self.clipboard_guard.enabled:
+            return False
+        sanitized = self.clipboard_guard.sanitize_and_validate(text)
+        self._sequence_counter += 1
+        env = MessageEnvelope(
+            type=MessageType.CLIPBOARD_UPDATE.value,
+            session_id=self.active_session_id or "",
+            sequence=self._sequence_counter,
+            payload={
+                "text": sanitized,
+                "format": "text/plain",
+                "sender_device_id": self.pairing_manager.device_id or "",
+                "timestamp_us": int(time.time() * 1_000_000),
+            },
+        )
+        try:
+            _send_envelope(sock, env)
+            return True
+        except OSError:
+            return False
+
+    def handle_incoming_clipboard(self, payload: ClipboardUpdatePayload) -> str | None:
+        """Processes and applies incoming clipboard text from authenticated peer."""
+        if self.state != ConnectionState.STREAMING:
+            raise ProtocolError(ErrorCode.INPUT_REJECTED, "Session is not active")
+        sanitized = self.clipboard_guard.sanitize_and_validate(payload.text)
+        if self.clipboard_adapter:
+            self.clipboard_adapter.set_text(sanitized)
+        if self.on_clipboard_received:
+            self.on_clipboard_received(sanitized)
+        return sanitized
 
     def update_telemetry(
         self, fps: float, latency_ms: float, bitrate_kbps: float, dropped_frames: int

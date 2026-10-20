@@ -30,6 +30,7 @@ from dualdesk.diagnostics.bundle import DiagnosticBundleGenerator
 from dualdesk.display.adaptive import AdaptiveRateController
 from dualdesk.display.capture import ScreenCaptureAdapter
 from dualdesk.display.driver import check_virtual_display_driver, get_supported_modes
+from dualdesk.display.multimonitor import enable_per_monitor_dpi_awareness
 from dualdesk.network.discovery import DiscoveredDevice, DiscoveryBeacon, DiscoveryService
 from dualdesk.network.transport import ConnectionManager, ConnectionState, SessionTelemetry
 from dualdesk.protocol.models import ProtocolError
@@ -520,6 +521,14 @@ class DualDeskApp(QMainWindow):
         self.chk_lan_discovery.setChecked(True)
         c_layout.addWidget(self.chk_lan_discovery)
 
+        # Clipboard synchronization setting
+        self.chk_clipboard_sync = QCheckBox("Enable Encrypted Bidirectional Clipboard Synchronization")
+        sync_enabled = bool(self.db.get_setting("clipboard_sync_enabled", True))
+        self.chk_clipboard_sync.setChecked(sync_enabled)
+        self.chk_clipboard_sync.toggled.connect(self._on_clipboard_sync_toggled)
+        self.connection_manager.clipboard_guard.enabled = sync_enabled
+        c_layout.addWidget(self.chk_clipboard_sync)
+
         # Emergency Escape Info
         escape_info = QLabel(
             "Emergency Pointer/Keyboard Escape: Press Ctrl + Alt + Shift + Escape at any time "
@@ -629,6 +638,15 @@ class DualDeskApp(QMainWindow):
         self._refresh_devices_table()
         QMessageBox.information(self, "Manual Device Added", f"Added manual target {ip}. Use Pair button to verify.")
 
+    def _on_clipboard_sync_toggled(self, checked: bool) -> None:
+        self.db.set_setting("clipboard_sync_enabled", checked)
+        self.connection_manager.clipboard_guard.enabled = checked
+        if checked:
+            if self.connection_manager.state == ConnectionState.STREAMING:
+                self.connection_manager.clipboard_adapter.start_monitoring()
+        else:
+            self.connection_manager.clipboard_adapter.stop_monitoring()
+
     def _on_connection_state_changed(self, state: ConnectionState, detail: str) -> None:
         is_active = state == ConnectionState.STREAMING
         self.card_conn.update_values(state.value, detail or "Session state updated", is_active=is_active)
@@ -638,9 +656,12 @@ class DualDeskApp(QMainWindow):
                 self.capture_adapter.source_label,
                 is_active=True,
             )
+            if self.chk_clipboard_sync.isChecked():
+                self.connection_manager.clipboard_adapter.start_monitoring()
         elif state in (ConnectionState.DISCONNECTED, ConnectionState.NOT_CONNECTED):
             self.card_stream.update_values("Inactive", "No active frame transmission.", is_active=False)
             self.btn_connect.setText("Start Session")
+            self.connection_manager.clipboard_adapter.stop_monitoring()
 
     def _on_telemetry_updated(self, telemetry: SessionTelemetry) -> None:
         self.metric_strip.update_metrics(
@@ -776,6 +797,7 @@ class DualDeskApp(QMainWindow):
 
 
 def main() -> int:
+    enable_per_monitor_dpi_awareness()
     app = QApplication(sys.argv)
     app.setApplicationName("DualDesk")
     app.setStyleSheet(DARK_THEME_QSS)

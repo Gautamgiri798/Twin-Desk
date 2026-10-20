@@ -5,13 +5,10 @@ import tempfile
 import time
 from pathlib import Path
 
-import pytest
-
 # Ensure headless offscreen platform for Qt tests
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PySide6.QtCore import QPointF, QRectF
-from PySide6.QtWidgets import QApplication
 
 from dualdesk.display.capture import ScreenCaptureAdapter
 from dualdesk.display.input_injector import InputInjector
@@ -19,14 +16,6 @@ from dualdesk.network.transport import ConnectionManager, ConnectionState
 from dualdesk.security.pairing import PairingManager
 from dualdesk.storage.db import DualDeskDB
 from dualdesk.ui.viewer import StreamViewerWidget, StreamWindow
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
 
 
 def test_screen_capture_real_frames():

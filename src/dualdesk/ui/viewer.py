@@ -1,7 +1,16 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QImage, QKeyEvent, QMouseEvent, QPainter, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QImage,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPixmap,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
 
 from dualdesk.display.decoder import VideoDecoderAdapter
@@ -110,6 +119,22 @@ class StreamViewerWidget(QWidget):
         elif event.button() == Qt.MouseButton.MiddleButton:
             btn_name = "middle"
         self.connection_manager.send_button(btn_name, pressed=False)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        norm = self._map_to_normalized(event.position())
+        nx, ny = norm if norm else (0.5, 0.5)
+        delta_y = float(event.angleDelta().y())
+        delta_x = float(event.angleDelta().x())
+        if delta_x != 0.0 or delta_y != 0.0:
+            self.connection_manager.send_gesture(
+                gesture="pan",
+                x=nx,
+                y=ny,
+                delta_x=delta_x,
+                delta_y=delta_y,
+                scale=1.0,
+                normalized=True,
+            )
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         # Emergency Escape shortcut: Ctrl + Alt + Shift + Escape

@@ -4,6 +4,7 @@ import ctypes
 import platform
 
 from dualdesk.display.multimonitor import CursorWarpController, VirtualDesktopLayout
+from dualdesk.protocol.models import GesturePayload, TouchPayload
 
 # Win32 Mouse Event Flags
 MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -12,9 +13,12 @@ MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_MIDDLEDOWN = 0x0020
 MOUSEEVENTF_MIDDLEUP = 0x0040
+MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_HWHEEL = 0x01000
 
 # Win32 Keyboard Event Flags
 KEYEVENTF_KEYUP = 0x0002
+VK_CONTROL = 0x11
 
 
 class InputInjector:
@@ -139,8 +143,102 @@ class InputInjector:
         except (AttributeError, OSError):
             return False
 
-    def release_all(self, keys: list[int] | None = None, buttons: list[str] | None = None) -> None:
-        """Synthesizes release for all currently held keys and buttons."""
+    def inject_scroll(self, delta_x: float = 0.0, delta_y: float = 0.0) -> bool:
+        """Injects vertical and horizontal mouse wheel events."""
+        if not self.enabled or not self._is_windows:
+            return True
+
+        success = True
+        try:
+            user32 = ctypes.windll.user32
+            # Vertical scroll
+            if int(delta_y) != 0:
+                dw_data = int(delta_y) & 0xFFFFFFFF
+                user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, dw_data, 0)
+            # Horizontal scroll
+            if int(delta_x) != 0:
+                dw_data = int(delta_x) & 0xFFFFFFFF
+                user32.mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, dw_data, 0)
+        except (AttributeError, OSError):
+            success = False
+        return success
+
+    def inject_gesture(self, gesture: GesturePayload) -> bool:
+        """Translates high-level multitouch gestures into Windows OS input actions."""
+        if not self.enabled:
+            return True
+
+        gt = gesture.gesture.lower()
+        if gt == "pan":
+            return self.inject_scroll(delta_x=gesture.delta_x, delta_y=gesture.delta_y)
+
+        if gt == "tap":
+            self.inject_pointer(gesture.x, gesture.y, normalized=gesture.normalized)
+            self.inject_button("left", pressed=True)
+            return self.inject_button("left", pressed=False)
+
+        if gt == "double_tap":
+            self.inject_pointer(gesture.x, gesture.y, normalized=gesture.normalized)
+            self.inject_button("left", pressed=True)
+            self.inject_button("left", pressed=False)
+            self.inject_button("left", pressed=True)
+            return self.inject_button("left", pressed=False)
+
+        if gt == "two_finger_tap":
+            self.inject_pointer(gesture.x, gesture.y, normalized=gesture.normalized)
+            self.inject_button("right", pressed=True)
+            return self.inject_button("right", pressed=False)
+
+        if gt == "pinch":
+            self.inject_pointer(gesture.x, gesture.y, normalized=gesture.normalized)
+            # Zoom in if scale > 1.05, zoom out if scale < 0.95
+            if gesture.scale > 1.05:
+                delta = int(120 * max(1.0, gesture.scale))
+                self.inject_key(VK_CONTROL, pressed=True)
+                self.inject_scroll(delta_y=float(delta))
+                self.inject_key(VK_CONTROL, pressed=False)
+                return True
+            elif gesture.scale < 0.95:
+                delta = -int(120 * max(1.0, 1.0 / max(0.01, gesture.scale)))
+                self.inject_key(VK_CONTROL, pressed=True)
+                self.inject_scroll(delta_y=float(delta))
+                self.inject_key(VK_CONTROL, pressed=False)
+                return True
+            return True
+
+        return False
+
+    def inject_touch(self, touch: TouchPayload) -> bool:
+        """Maps touch contacts to primary pointer and click interactions."""
+        if not self.enabled:
+            return True
+
+        if not touch.contacts:
+            if touch.action in ("up", "cancel"):
+                return self.inject_button("left", pressed=False)
+            return True
+
+        primary = touch.contacts[0]
+        action = touch.action.lower()
+
+        if action == "down":
+            self.inject_pointer(primary.x, primary.y, normalized=primary.normalized)
+            return self.inject_button("left", pressed=True)
+        elif action == "move":
+            return self.inject_pointer(primary.x, primary.y, normalized=primary.normalized)
+        elif action in ("up", "cancel"):
+            self.inject_pointer(primary.x, primary.y, normalized=primary.normalized)
+            return self.inject_button("left", pressed=False)
+
+        return False
+
+    def release_all(
+        self,
+        keys: list[int] | None = None,
+        buttons: list[str] | None = None,
+        touches: list[int] | None = None,
+    ) -> None:
+        """Synthesizes release for all currently held keys, buttons, and touches."""
         if not self.enabled or not self._is_windows:
             return
 
@@ -154,3 +252,7 @@ class InputInjector:
         if keys:
             for k in keys:
                 self.inject_key(k, pressed=False)
+
+        # Release any simulated active touch drag
+        if touches or touches is None:
+            self.inject_button("left", pressed=False)

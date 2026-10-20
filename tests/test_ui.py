@@ -2,22 +2,10 @@ from __future__ import annotations
 
 import os
 
-import pytest
-
 # Ensure headless offscreen platform for automated tests
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PySide6.QtWidgets import QApplication
-
 from dualdesk.ui.app import DualDeskApp
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
 
 
 def test_dualdesk_ui_initialization(qapp):

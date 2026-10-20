@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 
 from dualdesk.display.adaptive import AdaptiveRateController
+from dualdesk.display.dxgi_capture import DXGICaptureAdapter
 from dualdesk.display.encoder import (
     EncoderConfig,
     VideoCodec,
@@ -52,13 +53,14 @@ class CaptureStats:
     is_congested: bool = False
     codec: str = "jpeg"
     is_hardware_accelerated: bool = False
+    backend: str = "gdi"
 
 
 class ScreenCaptureAdapter:
     """
-    Screen capture adapter that captures desktop frames via Win32 GDI,
-    compresses frames into JPEG buffers, measures real FPS/latency/bitrate,
-    and dynamically adapts framerate and JPEG quality based on network congestion.
+    Screen capture adapter that captures desktop frames via DirectX 11 / DXGI Desktop Duplication
+    or Win32 GDI fallback, compresses frames into JPEG or H.264 buffers, measures real FPS/latency/bitrate,
+    and dynamically adapts framerate and quality based on network congestion.
     """
 
     def __init__(
@@ -71,6 +73,9 @@ class ScreenCaptureAdapter:
         adaptive_controller: AdaptiveRateController | None = None,
         codec: str = "jpeg",
         encoder: VideoEncoderAdapter | None = None,
+        backend: str = "auto",
+        output_index: int = 0,
+        dxgi_adapter: DXGICaptureAdapter | None = None,
     ) -> None:
         self.width = width
         self.height = height
@@ -79,6 +84,10 @@ class ScreenCaptureAdapter:
         self.is_virtual_display = is_virtual_display
         self.adaptive_controller = adaptive_controller
         self.codec = codec.lower()
+        self.backend = backend.lower()
+        self.output_index = output_index
+        self.dxgi_adapter = dxgi_adapter
+        self.active_backend = "dxgi" if (dxgi_adapter and dxgi_adapter.is_initialized) else "gdi"
         if self.codec == "h264" and encoder is None:
             self.encoder: VideoEncoderAdapter | None = VideoEncoderAdapter(
                 EncoderConfig(
@@ -114,8 +123,31 @@ class ScreenCaptureAdapter:
         self._fps_window_start = time.time()
         self._last_frame_time = 0.0
 
+        if self.dxgi_adapter is not None:
+            if not self.dxgi_adapter.is_initialized:
+                if self.dxgi_adapter.initialize(self.output_index):
+                    self.active_backend = "dxgi"
+                elif self.backend != "dxgi":
+                    self.active_backend = "gdi"
+            else:
+                self.active_backend = "dxgi"
+        elif self.backend in ("auto", "dxgi"):
+            try:
+                adapter = DXGICaptureAdapter(output_index=self.output_index)
+                if adapter.initialize(self.output_index):
+                    self.dxgi_adapter = adapter
+                    self.active_backend = "dxgi"
+                else:
+                    self.active_backend = "gdi"
+            except (AttributeError, OSError, ValueError, RuntimeError):
+                self.active_backend = "gdi"
+        else:
+            self.active_backend = "gdi"
+
     def stop_capture(self) -> None:
         self.is_capturing = False
+        if self.dxgi_adapter:
+            self.dxgi_adapter.cleanup()
 
     def capture_next_frame(self) -> tuple[bytes | None, CaptureStats]:
         """
@@ -136,60 +168,93 @@ class ScreenCaptureAdapter:
         cap_w = max(320, min(self.width, 1280))
         cap_h = max(180, min(self.height, 720))
 
-        if platform.system() == "Windows":
+        # 1. Try DXGI Desktop Duplication if active
+        if self.active_backend == "dxgi" and self.dxgi_adapter and self.dxgi_adapter.is_initialized:
             try:
-                user32 = ctypes.windll.user32
-                gdi32 = ctypes.windll.gdi32
-                hdesktop = user32.GetDesktopWindow()
-                hdc_screen = user32.GetDC(hdesktop)
-                hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
-                hbitmap = gdi32.CreateCompatibleBitmap(hdc_screen, cap_w, cap_h)
-                h_old = gdi32.SelectObject(hdc_mem, hbitmap)
+                dxgi_frame = self.dxgi_adapter.acquire_frame(timeout_ms=16)
+                if dxgi_frame is not None:
+                    if self.codec == "h264" and self.encoder:
+                        packet = self.encoder.encode_frame(
+                            raw_pixels=dxgi_frame.data,
+                            timestamp_us=dxgi_frame.timestamp_us,
+                        )
+                        frame_data = packet.data
+                    elif HAS_QT_IMAGE:
+                        img = QImage(
+                            dxgi_frame.data,
+                            dxgi_frame.width,
+                            dxgi_frame.height,
+                            dxgi_frame.pitch,
+                            QImage.Format.Format_ARGB32,
+                        )
+                        qbuf = QBuffer()
+                        qbuf.open(QIODevice.OpenModeFlag.WriteOnly)
+                        img.save(qbuf, "JPEG", self.quality)
+                        frame_data = bytes(qbuf.data())
+                    else:
+                        frame_data = dxgi_frame.data[:4096]
+                elif not self.dxgi_adapter.is_initialized:
+                    # Access lost and reinitialization failed; fall back to GDI
+                    self.active_backend = "gdi"
+            except (AttributeError, OSError, ValueError, RuntimeError):
+                self.active_backend = "gdi"
 
-                gdi32.BitBlt(hdc_mem, 0, 0, cap_w, cap_h, hdc_screen, 0, 0, 0x00CC0020)
+        # 2. Fall back to Win32 GDI if DXGI not active or produced no frame
+        if frame_data is None:
+            if platform.system() == "Windows":
+                try:
+                    user32 = ctypes.windll.user32
+                    gdi32 = ctypes.windll.gdi32
+                    hdesktop = user32.GetDesktopWindow()
+                    hdc_screen = user32.GetDC(hdesktop)
+                    hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+                    hbitmap = gdi32.CreateCompatibleBitmap(hdc_screen, cap_w, cap_h)
+                    h_old = gdi32.SelectObject(hdc_mem, hbitmap)
 
-                bmi = BITMAPINFOHEADER()
-                bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-                bmi.biWidth = cap_w
-                bmi.biHeight = -cap_h  # Top-down DIB
-                bmi.biPlanes = 1
-                bmi.biBitCount = 32
-                bmi.biCompression = 0
+                    gdi32.BitBlt(hdc_mem, 0, 0, cap_w, cap_h, hdc_screen, 0, 0, 0x00CC0020)
 
-                raw_buf = (ctypes.c_char * (cap_w * cap_h * 4))()
-                gdi32.GetDIBits(hdc_mem, hbitmap, 0, cap_h, raw_buf, ctypes.byref(bmi), 0)
+                    bmi = BITMAPINFOHEADER()
+                    bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+                    bmi.biWidth = cap_w
+                    bmi.biHeight = -cap_h  # Top-down DIB
+                    bmi.biPlanes = 1
+                    bmi.biBitCount = 32
+                    bmi.biCompression = 0
 
-                gdi32.SelectObject(hdc_mem, h_old)
-                gdi32.DeleteObject(hbitmap)
-                gdi32.DeleteDC(hdc_mem)
-                user32.ReleaseDC(hdesktop, hdc_screen)
+                    raw_buf = (ctypes.c_char * (cap_w * cap_h * 4))()
+                    gdi32.GetDIBits(hdc_mem, hbitmap, 0, cap_h, raw_buf, ctypes.byref(bmi), 0)
 
-                if self.codec == "h264" and self.encoder:
-                    packet = self.encoder.encode_frame(
-                        raw_pixels=bytes(raw_buf[: cap_w * cap_h * 4]),
-                        timestamp_us=int(now * 1_000_000),
-                    )
-                    frame_data = packet.data
-                elif HAS_QT_IMAGE:
-                    img = QImage(raw_buf, cap_w, cap_h, cap_w * 4, QImage.Format.Format_ARGB32)
-                    qbuf = QBuffer()
-                    qbuf.open(QIODevice.OpenModeFlag.WriteOnly)
-                    img.save(qbuf, "JPEG", self.quality)
-                    frame_data = bytes(qbuf.data())
-                else:
-                    frame_data = bytes(raw_buf[:4096])
-            except (AttributeError, OSError, TypeError):
+                    gdi32.SelectObject(hdc_mem, h_old)
+                    gdi32.DeleteObject(hbitmap)
+                    gdi32.DeleteDC(hdc_mem)
+                    user32.ReleaseDC(hdesktop, hdc_screen)
+
+                    if self.codec == "h264" and self.encoder:
+                        packet = self.encoder.encode_frame(
+                            raw_pixels=bytes(raw_buf[: cap_w * cap_h * 4]),
+                            timestamp_us=int(now * 1_000_000),
+                        )
+                        frame_data = packet.data
+                    elif HAS_QT_IMAGE:
+                        img = QImage(raw_buf, cap_w, cap_h, cap_w * 4, QImage.Format.Format_ARGB32)
+                        qbuf = QBuffer()
+                        qbuf.open(QIODevice.OpenModeFlag.WriteOnly)
+                        img.save(qbuf, "JPEG", self.quality)
+                        frame_data = bytes(qbuf.data())
+                    else:
+                        frame_data = bytes(raw_buf[:4096])
+                except (AttributeError, OSError, TypeError):
+                    if self.codec == "h264" and self.encoder:
+                        packet = self.encoder.encode_frame(raw_pixels=b"\x00" * 1024)
+                        frame_data = packet.data
+                    else:
+                        frame_data = b"\xff\xd8\xff\xe0" + b"\x00" * 1020
+            else:
                 if self.codec == "h264" and self.encoder:
                     packet = self.encoder.encode_frame(raw_pixels=b"\x00" * 1024)
                     frame_data = packet.data
                 else:
                     frame_data = b"\xff\xd8\xff\xe0" + b"\x00" * 1020
-        else:
-            if self.codec == "h264" and self.encoder:
-                packet = self.encoder.encode_frame(raw_pixels=b"\x00" * 1024)
-                frame_data = packet.data
-            else:
-                frame_data = b"\xff\xd8\xff\xe0" + b"\x00" * 1020
 
         capture_end = time.perf_counter()
         measured_latency = max(1.0, (capture_end - capture_start) * 1000.0)
@@ -228,4 +293,5 @@ class ScreenCaptureAdapter:
             is_congested=is_congested,
             codec=self.codec,
             is_hardware_accelerated=is_hw,
+            backend=self.active_backend,
         )

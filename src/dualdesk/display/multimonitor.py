@@ -6,6 +6,93 @@ import platform
 from dataclasses import dataclass, field
 
 
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+def enable_per_monitor_dpi_awareness() -> bool:
+    """
+    Configures Windows process DPI awareness to PerMonitorV2 mode.
+    Ensures 1:1 pixel coordinate precision and prevents bitmap virtualization scaling.
+    """
+    if platform.system() != "Windows":
+        return True
+
+    try:
+        user32 = ctypes.windll.user32
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+        if hasattr(user32, "SetProcessDpiAwarenessContext"):
+            if user32.SetProcessDpiAwarenessContext(-4):
+                return True
+            if user32.SetProcessDpiAwarenessContext(-3):
+                return True
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        shcore = getattr(ctypes.windll, "shcore", None)
+        if (
+            shcore
+            and hasattr(shcore, "SetProcessDpiAwareness")
+            and shcore.SetProcessDpiAwareness(2) == 0
+        ):
+            return True
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        user32 = ctypes.windll.user32
+        if hasattr(user32, "SetProcessDPIAware"):
+            return bool(user32.SetProcessDPIAware())
+    except (AttributeError, OSError):
+        pass
+
+    return False
+
+
+def get_dpi_for_point(x: int, y: int) -> tuple[int, int]:
+    """
+    Returns (dpi_x, dpi_y) for the physical display covering coordinates (x, y).
+    Defaults to (96, 96) standard 100% DPI.
+    """
+    if platform.system() == "Windows":
+        try:
+            user32 = ctypes.windll.user32
+            shcore = getattr(ctypes.windll, "shcore", None)
+            if shcore and hasattr(shcore, "GetDpiForMonitor"):
+                pt = POINT(int(x), int(y))
+                # MONITOR_DEFAULTTONEAREST = 2
+                hmon = user32.MonitorFromPoint(pt, 2)
+                if hmon:
+                    dx = ctypes.c_uint()
+                    dy = ctypes.c_uint()
+                    # MDT_EFFECTIVE_DPI = 0
+                    if shcore.GetDpiForMonitor(hmon, 0, ctypes.byref(dx), ctypes.byref(dy)) == 0:
+                        return int(dx.value), int(dy.value)
+        except (AttributeError, OSError):
+            pass
+
+    return 96, 96
+
+
+def scale_coordinate_between_displays(
+    x: float,
+    y: float,
+    src_disp: DisplayGeometry,
+    dst_disp: DisplayGeometry,
+) -> tuple[float, float]:
+    """
+    Scales coordinates when transitioning between mixed-DPI displays,
+    preserving relative position and accounting for monitor resolution and DPI differences.
+    """
+    norm_x = (x - src_disp.x) / max(1, src_disp.width)
+    norm_y = (y - src_disp.y) / max(1, src_disp.height)
+
+    dst_x = dst_disp.x + (norm_x * dst_disp.width)
+    dst_y = dst_disp.y + (norm_y * dst_disp.height)
+    return dst_x, dst_y
+
+
 @dataclass
 class DisplayGeometry:
     x: int = 0
@@ -14,6 +101,16 @@ class DisplayGeometry:
     height: int = 1080
     is_primary: bool = False
     device_name: str = "VirtualDisplay"
+    dpi_x: int = 96
+    dpi_y: int = 96
+
+    @property
+    def scale_factor_x(self) -> float:
+        return max(0.5, round(self.dpi_x / 96.0, 2))
+
+    @property
+    def scale_factor_y(self) -> float:
+        return max(0.5, round(self.dpi_y / 96.0, 2))
 
     @property
     def bounds(self) -> tuple[int, int, int, int]:
@@ -58,6 +155,7 @@ class VirtualDesktopLayout:
                 pri_w = user32.GetSystemMetrics(0)
                 pri_h = user32.GetSystemMetrics(1)
 
+                pri_dpi_x, pri_dpi_y = get_dpi_for_point(0, 0)
                 primary = DisplayGeometry(
                     x=0,
                     y=0,
@@ -65,10 +163,13 @@ class VirtualDesktopLayout:
                     height=pri_h or 1080,
                     is_primary=True,
                     device_name="PrimaryDisplay",
+                    dpi_x=pri_dpi_x,
+                    dpi_y=pri_dpi_y,
                 )
 
                 # Secondary display positioned to the right of primary monitor
                 sec_x = pri_w or 1920
+                sec_dpi_x, sec_dpi_y = get_dpi_for_point(sec_x, 0)
                 secondary = DisplayGeometry(
                     x=sec_x,
                     y=0,
@@ -76,6 +177,8 @@ class VirtualDesktopLayout:
                     height=secondary_height,
                     is_primary=False,
                     device_name="SecondaryVirtualDisplay",
+                    dpi_x=sec_dpi_x,
+                    dpi_y=sec_dpi_y,
                 )
 
                 total_vw = max(vw or (pri_w + secondary_width), pri_w + secondary_width)
@@ -92,8 +195,8 @@ class VirtualDesktopLayout:
                 pass
 
         # Fallback layout: Primary 1920x1080 at (0,0) + Secondary 1920x1080 at (1920,0)
-        pri = DisplayGeometry(0, 0, 1920, 1080, is_primary=True, device_name="Primary")
-        sec = DisplayGeometry(1920, 0, secondary_width, secondary_height, is_primary=False, device_name="Secondary")
+        pri = DisplayGeometry(0, 0, 1920, 1080, is_primary=True, device_name="Primary", dpi_x=96, dpi_y=96)
+        sec = DisplayGeometry(1920, 0, secondary_width, secondary_height, is_primary=False, device_name="Secondary", dpi_x=96, dpi_y=96)
         return cls(
             displays=[pri, sec],
             virtual_x=0,

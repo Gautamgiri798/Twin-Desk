@@ -6,9 +6,12 @@ from typing import Any, ClassVar
 from dualdesk.protocol.models import (
     ButtonPayload,
     ErrorCode,
+    GesturePayload,
     KeyPayload,
     PointerPayload,
     ProtocolError,
+    TouchPayload,
+    TouchPoint,
 )
 
 
@@ -21,6 +24,15 @@ class InputFilter:
 
     MAX_EVENTS_PER_SECOND = 250
     ALLOWED_BUTTONS: ClassVar[set[str]] = {"left", "right", "middle"}
+    ALLOWED_TOUCH_ACTIONS: ClassVar[set[str]] = {"down", "move", "up", "cancel"}
+    ALLOWED_GESTURES: ClassVar[set[str]] = {
+        "pan",
+        "pinch",
+        "tap",
+        "double_tap",
+        "two_finger_tap",
+    }
+    MAX_TOUCH_CONTACTS = 10
 
     def __init__(
         self,
@@ -34,6 +46,7 @@ class InputFilter:
         self.last_sequence = -1
         self._held_keys: set[int] = set()
         self._held_buttons: set[str] = set()
+        self._active_touches: set[int] = set()
         self._rate_window_start = time.time()
         self._rate_count = 0
         self.emergency_escape_triggered = False
@@ -114,17 +127,100 @@ class InputFilter:
 
         return payload.key_code, payload.key_name, payload.pressed
 
+    def process_touch(
+        self, payload: TouchPayload, sequence: int
+    ) -> TouchPayload:
+        self._check_rate_limit()
+        self.validate_sequence(sequence)
+
+        action = payload.action.lower()
+        if action not in self.ALLOWED_TOUCH_ACTIONS:
+            raise ProtocolError(
+                ErrorCode.INPUT_REJECTED, f"Unsupported touch action: {payload.action}"
+            )
+
+        if len(payload.contacts) > self.MAX_TOUCH_CONTACTS:
+            raise ProtocolError(
+                ErrorCode.INPUT_REJECTED,
+                f"Too many touch contacts ({len(payload.contacts)} > {self.MAX_TOUCH_CONTACTS})",
+            )
+
+        sanitized_contacts: list[TouchPoint] = []
+        for contact in payload.contacts:
+            if contact.normalized:
+                x = max(0.0, min(1.0, float(contact.x)))
+                y = max(0.0, min(1.0, float(contact.y)))
+            else:
+                x = max(0.0, min(float(self.display_width), float(contact.x)))
+                y = max(0.0, min(float(self.display_height), float(contact.y)))
+
+            pressure = max(0.0, min(10.0, float(contact.pressure)))
+
+            if action == "down":
+                self._active_touches.add(contact.id)
+            elif action in ("up", "cancel"):
+                self._active_touches.discard(contact.id)
+
+            sanitized_contacts.append(
+                TouchPoint(
+                    id=int(contact.id),
+                    x=x,
+                    y=y,
+                    pressure=pressure,
+                    normalized=contact.normalized,
+                )
+            )
+
+        return TouchPayload(action=action, contacts=sanitized_contacts)
+
+    def process_gesture(
+        self, payload: GesturePayload, sequence: int
+    ) -> GesturePayload:
+        self._check_rate_limit()
+        self.validate_sequence(sequence)
+
+        gesture = payload.gesture.lower()
+        if gesture not in self.ALLOWED_GESTURES:
+            raise ProtocolError(
+                ErrorCode.INPUT_REJECTED, f"Unsupported gesture type: {payload.gesture}"
+            )
+
+        if payload.normalized:
+            x = max(0.0, min(1.0, float(payload.x)))
+            y = max(0.0, min(1.0, float(payload.y)))
+        else:
+            x = max(0.0, min(float(self.display_width), float(payload.x)))
+            y = max(0.0, min(float(self.display_height), float(payload.y)))
+
+        # Guard delta bounds against numeric overflows / flood
+        delta_x = max(-10000.0, min(10000.0, float(payload.delta_x)))
+        delta_y = max(-10000.0, min(10000.0, float(payload.delta_y)))
+        scale = max(0.01, min(100.0, float(payload.scale)))
+
+        return GesturePayload(
+            gesture=gesture,
+            x=x,
+            y=y,
+            delta_x=delta_x,
+            delta_y=delta_y,
+            scale=scale,
+            normalized=payload.normalized,
+        )
+
     def release_all(self) -> dict[str, Any]:
-        """Synthesizes release of all currently held keys and buttons."""
+        """Synthesizes release of all currently held keys, buttons, and active touches."""
         released_keys = list(self._held_keys)
         released_buttons = list(self._held_buttons)
+        released_touches = list(self._active_touches)
         self._held_keys.clear()
         self._held_buttons.clear()
+        self._active_touches.clear()
         return {
             "released_keys": released_keys,
             "released_buttons": released_buttons,
+            "released_touches": released_touches,
         }
 
     @property
     def has_held_inputs(self) -> bool:
-        return bool(self._held_keys or self._held_buttons)
+        return bool(self._held_keys or self._held_buttons or self._active_touches)

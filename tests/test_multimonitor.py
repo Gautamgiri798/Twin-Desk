@@ -5,6 +5,9 @@ from dualdesk.display.multimonitor import (
     CursorWarpController,
     DisplayGeometry,
     VirtualDesktopLayout,
+    enable_per_monitor_dpi_awareness,
+    get_dpi_for_point,
+    scale_coordinate_between_displays,
 )
 
 
@@ -126,3 +129,45 @@ def test_input_injector_multimonitor() -> None:
     injector.update_bounds(2560, 1440)
     assert injector.display_width == 2560
     assert injector.display_height == 1440
+
+
+def test_mixed_dpi_scale_factors() -> None:
+    d1 = DisplayGeometry(width=1920, height=1080, dpi_x=96, dpi_y=96)
+    assert d1.scale_factor_x == 1.0
+    assert d1.scale_factor_y == 1.0
+
+    d2 = DisplayGeometry(width=1920, height=1080, dpi_x=144, dpi_y=144)
+    assert d2.scale_factor_x == 1.5
+    assert d2.scale_factor_y == 1.5
+
+    d3 = DisplayGeometry(width=3840, height=2160, dpi_x=192, dpi_y=192)
+    assert d3.scale_factor_x == 2.0
+    assert d3.scale_factor_y == 2.0
+
+
+def test_scale_coordinate_between_displays() -> None:
+    src = DisplayGeometry(x=0, y=0, width=1920, height=1080, dpi_x=144, dpi_y=144)
+    dst = DisplayGeometry(x=1920, y=0, width=1920, height=1080, dpi_x=96, dpi_y=96)
+
+    # Origin (0, 0) maps to destination origin (1920, 0)
+    cx, cy = scale_coordinate_between_displays(0, 0, src, dst)
+    assert cx == 1920.0
+    assert cy == 0.0
+
+    # Center (960, 540) maps to destination center (2880, 540)
+    cx, cy = scale_coordinate_between_displays(960, 540, src, dst)
+    assert cx == 2880.0
+    assert cy == 540.0
+
+
+def test_enable_per_monitor_dpi_awareness() -> None:
+    # Must execute safely on host OS without raising exceptions
+    res = enable_per_monitor_dpi_awareness()
+    assert isinstance(res, bool)
+
+
+def test_get_dpi_for_point() -> None:
+    dx, dy = get_dpi_for_point(100, 100)
+    assert dx >= 96
+    assert dy >= 96
+

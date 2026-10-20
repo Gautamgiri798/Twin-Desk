@@ -1,5 +1,6 @@
 """DualDesk display module: virtual monitor driver detection, display mode negotiation, and screen capture."""
 from dualdesk.display.capture import CaptureStats, ScreenCaptureAdapter
+from dualdesk.display.clipboard import ClipboardAdapter
 from dualdesk.display.decoder import (
     DecodedVideoFrame,
     DecoderBackend,
@@ -11,6 +12,7 @@ from dualdesk.display.driver import (
     check_virtual_display_driver,
     get_supported_modes,
 )
+from dualdesk.display.dxgi_capture import DXGICaptureAdapter, DXGIFrame
 from dualdesk.display.encoder import (
     EncodedVideoPacket,
     EncoderBackend,
@@ -25,11 +27,17 @@ from dualdesk.display.multimonitor import (
     CursorWarpController,
     DisplayGeometry,
     VirtualDesktopLayout,
+    enable_per_monitor_dpi_awareness,
+    get_dpi_for_point,
+    scale_coordinate_between_displays,
 )
 
 __all__ = [
     "CaptureStats",
+    "ClipboardAdapter",
     "CursorWarpController",
+    "DXGICaptureAdapter",
+    "DXGIFrame",
     "DecodedVideoFrame",
     "DecoderBackend",
     "DisplayDriverStatus",
@@ -46,6 +54,9 @@ __all__ = [
     "VirtualDesktopLayout",
     "check_virtual_display_driver",
     "detect_encoder_capabilities",
+    "enable_per_monitor_dpi_awareness",
+    "get_dpi_for_point",
     "get_supported_modes",
     "parse_annex_b_nalus",
+    "scale_coordinate_between_displays",
 ]
