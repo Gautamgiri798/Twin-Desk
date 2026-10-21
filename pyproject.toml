@@ -28,6 +28,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+  "ignore::ResourceWarning",
+]
 
 [tool.ruff]
 line-length = 100

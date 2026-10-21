@@ -9,4 +9,6 @@ def qapp():
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    return app
+    yield app
+    app.processEvents()
+    app.quit()
