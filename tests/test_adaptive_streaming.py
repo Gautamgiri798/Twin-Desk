@@ -171,3 +171,40 @@ def test_connection_manager_broadcast_latency_tracking() -> None:
             time.sleep(0.1)
             client_cm.db.close()
             host_cm.db.close()
+
+
+def test_adaptive_rate_controller_network_status_transitions() -> None:
+    profile = AdaptiveProfile(
+        target_fps=60,
+        jpeg_quality=70,
+        min_fps=15,
+        max_fps=60,
+        min_quality=30,
+        max_quality=85,
+        congestion_latency_ms=30.0,
+        recovery_latency_ms=10.0,
+        consecutive_fast_frames_required=4,
+    )
+    ctrl = AdaptiveRateController(profile)
+    assert ctrl.network_status == "Nominal"
+    assert ctrl.get_metrics().network_status == "Nominal"
+
+    # Moderate congestion -> "Congested"
+    ctrl.record_send_latency(32.0)
+    assert ctrl.is_congested is True
+    assert ctrl.network_status == "Congested"
+    assert ctrl.get_metrics().network_status == "Congested"
+
+    # Severe congestion -> "Backpressure"
+    ctrl.record_send_latency(50.0)
+    assert ctrl.is_congested is True
+    assert ctrl.network_status == "Backpressure"
+
+    # Fast frame -> "Recovering"
+    ctrl.record_send_latency(5.0)
+    assert ctrl.network_status == "Recovering"
+
+    # Reset -> "Nominal"
+    ctrl.reset()
+    assert ctrl.network_status == "Nominal"
+

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import time
+from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -40,10 +42,13 @@ from dualdesk.security.tls import get_or_create_tls_credentials
 from dualdesk.storage.db import DualDeskDB
 from dualdesk.ui.components import (
     DeviceCard,
+    FramerateGraphCard,
+    LatencyGraphCard,
     LiveMetricStrip,
     NoticeBanner,
     PairingDialog,
     StatCard,
+    TelemetrySample,
 )
 from dualdesk.ui.theme import DARK_THEME_QSS
 from dualdesk.ui.viewer import StreamViewerWidget, StreamWindow
@@ -61,6 +66,7 @@ class DualDeskApp(QMainWindow):
         self.identity: DeviceIdentity = get_or_create_device_identity(self.db)
         self.pairing_manager = PairingManager(self.db, self.identity.fingerprint)
         self.driver_status = check_virtual_display_driver()
+        self.telemetry_history: deque[TelemetrySample] = deque(maxlen=60)
 
         saved_role = self.db.get_setting("role", "host")
         self.role = saved_role
@@ -468,6 +474,47 @@ class DualDeskApp(QMainWindow):
         c_layout.addWidget(hw_label)
 
         layout.addWidget(card)
+
+        # Performance History Graphs Row
+        graphs_row = QHBoxLayout()
+        graphs_row.setSpacing(16)
+        self.latency_graph = LatencyGraphCard()
+        self.fps_graph = FramerateGraphCard()
+        graphs_row.addWidget(self.latency_graph)
+        graphs_row.addWidget(self.fps_graph)
+        layout.addLayout(graphs_row)
+
+        # Adaptive Rate Controller Info Card
+        adapt_card = QFrame()
+        adapt_card.setProperty("class", "Card")
+        a_layout = QVBoxLayout(adapt_card)
+        a_title = QLabel("Adaptive Rate Controller")
+        a_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #38bdf8;")
+        a_layout.addWidget(a_title)
+
+        a_desc = QLabel(
+            "Dynamically modulates compression quality and target framerate in response to network send latency "
+            "and socket backpressure to maintain real-time responsiveness."
+        )
+        a_desc.setWordWrap(True)
+        a_desc.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        a_layout.addWidget(a_desc)
+
+        a_metrics_row = QHBoxLayout()
+        self.perf_fps_target_label = QLabel("Target FPS: 60")
+        self.perf_fps_target_label.setStyleSheet("color: #f8fafc; font-size: 13px; font-weight: 600;")
+        self.perf_quality_label = QLabel("Quality Target: 70%")
+        self.perf_quality_label.setStyleSheet("color: #f8fafc; font-size: 13px; font-weight: 600;")
+        self.perf_network_status_label = QLabel("Network Status: Nominal")
+        self.perf_network_status_label.setStyleSheet("color: #10b981; font-size: 13px; font-weight: 600;")
+
+        a_metrics_row.addWidget(self.perf_fps_target_label)
+        a_metrics_row.addWidget(self.perf_quality_label)
+        a_metrics_row.addWidget(self.perf_network_status_label)
+        a_metrics_row.addStretch(1)
+        a_layout.addLayout(a_metrics_row)
+
+        layout.addWidget(adapt_card)
         layout.addStretch(1)
         return page
 
@@ -711,23 +758,79 @@ class DualDeskApp(QMainWindow):
             self.res_combo.blockSignals(False)
 
     def _on_telemetry_updated(self, telemetry: SessionTelemetry) -> None:
+        quality = getattr(telemetry, "quality", 70)
+        target_fps = getattr(telemetry, "target_fps", 60)
+        network_status = getattr(telemetry, "network_status", "Nominal")
+        codec = getattr(telemetry, "codec", "jpeg")
+        is_congested = network_status in ("Congested", "Backpressure")
+
         self.metric_strip.update_metrics(
             fps=telemetry.fps,
             latency_ms=telemetry.latency_ms,
             bitrate_kbps=telemetry.bitrate_kbps,
             dropped=telemetry.dropped_frames,
+            quality=quality,
+            target_fps=target_fps,
+            network_status=network_status,
+            codec=codec,
         )
+
+        sample = TelemetrySample(
+            timestamp=time.time(),
+            fps=telemetry.fps,
+            latency_ms=telemetry.latency_ms,
+            bitrate_kbps=telemetry.bitrate_kbps,
+            dropped_frames=telemetry.dropped_frames,
+            network_status=network_status,
+            is_congested=is_congested,
+        )
+        self.telemetry_history.append(sample)
+
+        if hasattr(self, "latency_graph"):
+            self.latency_graph.update_history(self.telemetry_history)
+        if hasattr(self, "fps_graph"):
+            self.fps_graph.update_history(self.telemetry_history)
+
+        if hasattr(self, "perf_fps_target_label"):
+            self.perf_fps_target_label.setText(f"Target FPS: {target_fps}")
+        if hasattr(self, "perf_quality_label"):
+            self.perf_quality_label.setText(f"Quality Target: {quality}%")
+        if hasattr(self, "perf_network_status_label"):
+            status_colors = {
+                "Nominal": "#10b981",
+                "Recovering": "#38bdf8",
+                "Congested": "#f59e0b",
+                "Backpressure": "#ef4444",
+            }
+            color = status_colors.get(network_status, "#38bdf8")
+            self.perf_network_status_label.setText(f"Network Status: {network_status}")
+            self.perf_network_status_label.setStyleSheet(
+                f"color: {color}; font-size: 13px; font-weight: 600;"
+            )
 
     def _on_timer_tick(self) -> None:
         if self.connection_manager.state == ConnectionState.STREAMING and self.role == "host":
             frame_bytes, stats = self.capture_adapter.capture_next_frame()
             if frame_bytes:
                 self.connection_manager.broadcast_frame(frame_bytes)
+
+            target_fps = 60
+            network_status = "Nominal"
+            quality = stats.quality
+            if self.adaptive_controller:
+                target_fps = self.adaptive_controller.current_fps
+                quality = self.adaptive_controller.current_quality
+                network_status = self.adaptive_controller.network_status
+
             self.connection_manager.update_telemetry(
                 fps=stats.fps,
                 latency_ms=stats.latency_ms,
                 bitrate_kbps=stats.bitrate_kbps,
                 dropped_frames=stats.dropped_frames,
+                quality=quality,
+                target_fps=target_fps,
+                network_status=network_status,
+                codec=stats.codec,
             )
 
     def _refresh_devices_table(self) -> None:

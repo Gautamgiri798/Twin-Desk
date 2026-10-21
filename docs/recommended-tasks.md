@@ -6,7 +6,8 @@ This document contains the complete and exhaustive list of all upcoming recommen
 
 ## 1. Real-Time UI Telemetry & Controls (Immediate Priority)
 
-### TASK-01: Adaptive Bitrate UI Feedback Indicator
+### TASK-01: Adaptive Bitrate UI Feedback Indicator [COMPLETED]
+- **Status**: Completed & Verified
 - **Category**: UI & Streaming Telemetry
 - **Goal**: Expose real-time adaptive rate controller metrics to the user in the UI metric strip.
 - **Details**:
@@ -16,12 +17,16 @@ This document contains the complete and exhaustive list of all upcoming recommen
 - **Files**:
   - `src/dualdesk/ui/components.py`
   - `src/dualdesk/ui/app.py`
+  - `src/dualdesk/display/adaptive.py`
+  - `src/dualdesk/network/transport.py`
   - `tests/test_ui.py`
+  - `tests/test_adaptive_streaming.py`
 - **Acceptance Criteria**:
   - UI metric strip dynamically updates when `AdaptiveRateController` throttles quality or target FPS.
   - Automated tests verify label updates and ensure layout stability.
 
-### TASK-02: Real-Time Performance History Graphs
+### TASK-02: Real-Time Performance History Graphs [COMPLETED]
+- **Status**: Completed & Verified
 - **Category**: UI & Diagnostics
 - **Goal**: Render real-time rolling sparklines/graphs on the Performance page for FPS, latency (ms), and frame drop rate.
 - **Details**:

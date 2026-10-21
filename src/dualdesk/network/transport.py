@@ -63,6 +63,10 @@ class SessionTelemetry:
     latency_ms: float = 0.0
     bitrate_kbps: float = 0.0
     dropped_frames: int = 0
+    quality: int = 70
+    target_fps: int = 60
+    network_status: str = "Nominal"
+    codec: str = "jpeg"
 
 
 def _send_envelope(sock: socket.socket, envelope: MessageEnvelope) -> None:
@@ -1230,11 +1234,23 @@ class ConnectionManager:
         return sanitized
 
     def update_telemetry(
-        self, fps: float, latency_ms: float, bitrate_kbps: float, dropped_frames: int
+        self,
+        fps: float,
+        latency_ms: float,
+        bitrate_kbps: float,
+        dropped_frames: int,
+        quality: int = 70,
+        target_fps: int = 60,
+        network_status: str = "Nominal",
+        codec: str = "jpeg",
     ) -> None:
         self.telemetry.fps = fps
         self.telemetry.latency_ms = latency_ms
         self.telemetry.bitrate_kbps = bitrate_kbps
         self.telemetry.dropped_frames = dropped_frames
+        self.telemetry.quality = quality
+        self.telemetry.target_fps = target_fps
+        self.telemetry.network_status = network_status
+        self.telemetry.codec = codec
         if self.on_telemetry_updated:
             self.on_telemetry_updated(self.telemetry)
