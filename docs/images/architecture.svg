@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 440" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B0F19"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="hostGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#0369A1" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="netGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#047857" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="clientGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A855F7" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#7E22CE" stop-opacity="0.08"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <marker id="arrowSky" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#38BDF8"/>
+    </marker>
+    <marker id="arrowEmerald" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#34D399"/>
+    </marker>
+    <marker id="arrowPurple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#C084FC"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="440" rx="14" fill="url(#bgGrad)" stroke="#1F2937" stroke-width="2"/>
+
+  <!-- Column 1: Primary PC (Host) -->
+  <g transform="translate(30, 25)">
+    <rect width="320" height="390" rx="10" fill="url(#hostGrad)" stroke="#0284C7" stroke-width="2"/>
+    <text x="160" y="32" fill="#38BDF8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" font-weight="bold" text-anchor="middle">🖥️ PRIMARY PC (Host / Sender)</text>
+
+    <!-- Node: OS DWM -->
+    <rect x="20" y="55" width="280" height="48" rx="6" fill="#1E293B" stroke="#475569" stroke-width="1.5"/>
+    <text x="160" y="76" fill="#F8FAFC" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">Windows Desktop Manager (DWM)</text>
+    <text x="160" y="93" fill="#94A3B8" font-family="sans-serif" font-size="10" text-anchor="middle">Desktop Composition &amp; Virtual Display Settings</text>
+
+    <!-- Node: IDD Driver -->
+    <rect x="20" y="118" width="280" height="48" rx="6" fill="#1E293B" stroke="#0284C7" stroke-width="1.5"/>
+    <text x="160" y="139" fill="#38BDF8" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">Windows IddCx Driver (Optional)</text>
+    <text x="160" y="156" fill="#94A3B8" font-family="sans-serif" font-size="10" text-anchor="middle">Synthetic EDID 1.4 Virtual Monitor / Fallback</text>
+
+    <!-- Node: DXGI Capture -->
+    <rect x="20" y="181" width="280" height="48" rx="6" fill="#1E293B" stroke="#475569" stroke-width="1.5"/>
+    <text x="160" y="202" fill="#F8FAFC" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">DXGI / GDI Capture Pipeline</text>
+    <text x="160" y="219" fill="#94A3B8" font-family="sans-serif" font-size="10" text-anchor="middle">IDXGIOutputDuplication Zero-Copy Surface</text>
+
+    <!-- Node: Encoder -->
+    <rect x="20" y="244" width="280" height="48" rx="6" fill="#1E293B" stroke="#475569" stroke-width="1.5"/>
+    <text x="160" y="265" fill="#F8FAFC" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">Hardware Video Encoder</text>
+    <text x="160" y="282" fill="#94A3B8" font-family="sans-serif" font-size="10" text-anchor="middle">NVENC / Intel QuickSync / AMD AMF / JPEG</text>
+
+    <!-- Node: Host Transport -->
+    <rect x="20" y="307" width="280" height="48" rx="6" fill="#1E293B" stroke="#0284C7" stroke-width="1.5"/>
+    <text x="160" y="328" fill="#38BDF8" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">TLS 1.3 Transport Server</text>
+    <text x="160" y="345" fill="#94A3B8" font-family="sans-serif" font-size="10" text-anchor="middle">Ports: 53892 (Control) &amp; 53893 (Video)</text>
+  </g>
+
+  <!-- Host Internal Pipeline Arrows -->
+  <line x1="190" y1="128" x2="190" y2="143" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arrowSky)"/>
+  <line x1="190" y1="191" x2="190" y2="206" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arrowSky)"/>
+  <line x1="190" y1="254" x2="190" y2="269" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arrowSky)"/>
+  <line x1="190" y1="317" x2="190" y2="332" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arrowSky)"/>
+
+  <!-- Column 2: Encrypted Local Network -->
+  <g transform="translate(390, 25)">
+    <rect width="320" height="390" rx="10" fill="url(#netGrad)" stroke="#10B981" stroke-width="2"/>
+    <text x="160" y="32" fill="#34D399" font-family="sans-serif" font-size="15" font-weight="bold" text-anchor="middle">🔒 Local Area Network (Wi-Fi / LAN)</text>
+
+    <!-- Node: Control Channel -->
+    <rect x="20" y="75" width="280" height="65" rx="6" fill="#064E3B" fill-opacity="0.4" stroke="#10B981" stroke-width="1.5"/>
+    <text x="160" y="100" fill="#6EE7B7" font-family="sans-serif" font-size="12" font-weight="bold" text-anchor="middle">TLS 1.3 Control Channel (TCP 53892)</text>
+    <text x="160" y="118" fill="#A7F3D0" font-family="sans-serif" font-size="10" text-anchor="middle">Identity Pairing • Remote Mouse/Key Injection</text>
+    <text x="160" y="132" fill="#A7F3D0" font-family="sans-serif" font-size="10" text-anchor="middle">File Transfers (Up to 250MB) • Clipboard Sync</text>
+
+    <!-- Node: Media Stream -->
+    <rect x="20" y="175" width="280" height="65" rx="6" fill="#064E3B" fill-opacity="0.4" stroke="#10B981" stroke-width="1.5"/>
+    <text x="160" y="200" fill="#6EE7B7" font-family="sans-serif" font-size="12" font-weight="bold" text-anchor="middle">TLS 1.3 Video Stream (TCP 53893)</text>
+    <text x="160" y="218" fill="#A7F3D0" font-family="sans-serif" font-size="10" text-anchor="middle">H.264 Annex B / High-Q JPEG Frames</text>
+    <text x="160" y="232" fill="#A7F3D0" font-family="sans-serif" font-size="10" text-anchor="middle">Adaptive 15–60 FPS Rate Control</text>
+
+    <!-- Node: UDP Discovery -->
+    <rect x="20" y="275" width="280" height="65" rx="6" fill="#064E3B" fill-opacity="0.4" stroke="#10B981" stroke-width="1.5"/>
+    <text x="160" y="303" fill="#6EE7B7" font-family="sans-serif" font-size="12" font-weight="bold" text-anchor="middle">UDP Discovery Beacon (Port 53891)</text>
+    <text x="160" y="322" fill="#A7F3D0" font-family="sans-serif" font-size="10" text-anchor="middle">Zero-Config Multicast/Broadcast LAN Peer Ping</text>
+  </g>
+
+  <!-- Column 3: Second Laptop (Client) -->
+  <g transform="translate(750, 25)">
+    <rect width="320" height="390" rx="10" fill="url(#clientGrad)" stroke="#A855F7" stroke-width="2"/>
+    <text x="160" y="32" fill="#C084FC" font-family="sans-serif" font-size="15" font-weight="bold" text-anchor="middle">💻 SECOND LAPTOP (Client / Viewer)</text>
+
+    <!-- Node: Client Engine -->
+    <rect x="20" y="55" width="280" height="48" rx="6" fill="#1E293B" stroke="#A855F7" stroke-width="1.5"/>
+    <text x="160" y="76" fill="#C084FC" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">TLS 1.3 Client Engine</text>
+    <text x="160" y="93" fill="#94A3B8" font-family="sans-serif" font-size="10" text-anchor="middle">Discovery Listener &amp; Encrypted Sessions</text>
+
+    <!-- Node: Video Decoder -->
+    <rect x="20" y="118" width="280" height="48" rx="6" fill="#1E293B" stroke="#475569" stroke-width="1.5"/>
+    <text x="160" y="139" fill="#F8FAFC" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">Video Decoder Pipeline</text>
+    <text x="160" y="156" fill="#94A3B8" font-family="sans-serif" font-size="10" text-anchor="middle">Hardware / Software H.264 &amp; JPEG Decompressor</text>
+
+    <!-- Node: Qt Viewport -->
+    <rect x="20" y="181" width="280" height="48" rx="6" fill="#1E293B" stroke="#475569" stroke-width="1.5"/>
+    <text x="160" y="202" fill="#F8FAFC" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">PySide6 Render Viewport</text>
+    <text x="160" y="219" fill="#94A3B8" font-family="sans-serif" font-size="10" text-anchor="middle">OpenGL-backed Fullscreen Display (F11)</text>
+
+    <!-- Node: Input Capture -->
+    <rect x="20" y="244" width="280" height="48" rx="6" fill="#1E293B" stroke="#475569" stroke-width="1.5"/>
+    <text x="160" y="265" fill="#F8FAFC" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">Input &amp; Touch Capture</text>
+    <text x="160" y="282" fill="#94A3B8" font-family="sans-serif" font-size="10" text-anchor="middle">Mouse, Key Events, Two-Finger Touch Scroll</text>
+
+    <!-- Node: Emergency Escape -->
+    <rect x="20" y="307" width="280" height="48" rx="6" fill="#1E293B" stroke="#EF4444" stroke-width="1.5"/>
+    <text x="160" y="328" fill="#FCA5A5" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">Emergency Escape Monitor</text>
+    <text x="160" y="345" fill="#94A3B8" font-family="sans-serif" font-size="10" text-anchor="middle">Instant Host Revocation: Ctrl+Alt+Shift+Esc</text>
+  </g>
+
+  <!-- Client Internal Pipeline Arrows -->
+  <line x1="910" y1="128" x2="910" y2="143" stroke="#C084FC" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <line x1="910" y1="191" x2="910" y2="206" stroke="#C084FC" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <line x1="910" y1="254" x2="910" y2="269" stroke="#C084FC" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <line x1="910" y1="317" x2="910" y2="332" stroke="#C084FC" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+
+  <!-- Cross-Boundary Connections -->
+  <!-- Control Channel (Bidirectional) -->
+  <path d="M 330 355 L 360 355 L 360 132 L 410 132" fill="none" stroke="#38BDF8" stroke-width="1.5"/>
+  <path d="M 690 132 L 770 132 L 770 103" fill="none" stroke="#34D399" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+
+  <!-- Video Stream (Host to Client) -->
+  <path d="M 330 360 L 370 360 L 370 232 L 410 232" fill="none" stroke="#38BDF8" stroke-width="1.5"/>
+  <path d="M 690 232 L 760 232 L 760 166" fill="none" stroke="#34D399" stroke-width="2" marker-end="url(#arrowPurple)"/>
+
+  <!-- UDP Discovery (Client to Host) -->
+  <path d="M 770 103 L 730 103 L 730 332 L 690 332" fill="none" stroke="#C084FC" stroke-width="1.5" stroke-dasharray="4,4"/>
+  <path d="M 410 332 L 350 332 L 350 350 L 330 350" fill="none" stroke="#34D399" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowSky)"/>
+</svg>

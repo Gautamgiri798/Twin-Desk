@@ -18,10 +18,11 @@
 [![Driver Architecture](https://img.shields.io/badge/Driver-Windows%20IddCx%20(UMDF%202)-blueviolet?style=for-the-badge)](native/idd_driver)
 [![Security](https://img.shields.io/badge/Security-TLS%201.3%20%7C%20SHA--256-blue?style=for-the-badge)](src/dualdesk/security)
 [![Tests](https://img.shields.io/badge/Tests-136%20passed-success?style=for-the-badge&logo=pytest&logoColor=white)](tests/)
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
 <br>
 
-[✨ Key Features](#-key-features) • [⚡ 3-Step Quick Start](#-3-step-quick-start) • [🏗️ Architecture](#️-architecture) • [📂 Project Structure](#-project-structure) • [🛠️ Setup & Connecting](#️-setup--connecting-two-pcs) • [🔒 Security & Safety](#-security--safety)
+[✨ Key Features](#-key-features) • [⚡ 3-Step Quick Start](#-3-step-quick-start) • [🏗️ Architecture](#️-architecture) • [📂 Project Structure](#-project-structure) • [🛠️ Setup & Connecting](#️-setup--connecting-two-pcs) • [⚙️ Virtual Driver](#️-native-virtual-display-driver-development--testing) • [🔒 Safety](#-security--safety) • [📄 License](#-license)
 
 <br>
 
@@ -30,13 +31,20 @@
 ---
 
 > [!NOTE]
-> **Extended Desktop Architecture**: Unlike standard remote desktop or window-mirroring software, Twin Desk is designed around the **Windows Indirect Display Driver (IDD / IddCx)** subsystem to register a genuine secondary display adapter in Windows Display Settings. When operating without the driver, Twin Desk runs in a high-efficiency prototype screen-streaming mode.
+> **Extended Desktop Architecture**: Unlike standard remote desktop or window-mirroring software, Twin Desk is designed around the **Windows Indirect Display Driver (IDD / IddCx)** subsystem to register a genuine secondary display adapter in Windows Display Settings. When operating without the driver, Twin Desk runs in a high-efficiency prototype screen-streaming mode (not a working virtual-display product until driver installation).
 
 ---
 
 ## ⚡ 3-Step Quick Start
 
 Once installed on both machines, connecting whenever you want to work takes less than 10 seconds:
+
+<p align="center">
+  <img src="docs/images/quickstart.svg" alt="Twin Desk Quick Start Connection Sequence" width="100%" />
+</p>
+
+<details>
+<summary><b>View Raw Diagram Specification (Mermaid &amp; D2)</b></summary>
 
 ```mermaid
 sequenceDiagram
@@ -58,6 +66,9 @@ sequenceDiagram
     Host-->>Client: 60 FPS Video Stream (Port 53893)
     Client-->>User: Fullscreen Extended Display (Press F11)
 ```
+
+- Declarative D2 Source: [`docs/quickstart.d2`](docs/quickstart.d2)
+</details>
 
 1. **On your Primary PC (Host)**:
    - Double-click [`run_host.bat`](run_host.bat).
@@ -107,6 +118,13 @@ sequenceDiagram
 > - 🎨 **draw.io / diagrams.net**: [`docs/architecture.drawio`](docs/architecture.drawio) — Open in [draw.io / diagrams.net](https://app.diagrams.net) or the VS Code Draw.io extension for full interactive inspection and vector editing.
 > - 📄 **D2 Declarative Source**: [`docs/architecture.d2`](docs/architecture.d2) & [`docs/quickstart.d2`](docs/quickstart.d2) — Declarative architecture and sequence specifications.
 
+<p align="center">
+  <img src="docs/images/architecture.svg" alt="Twin Desk Subsystem Architecture Diagram" width="100%" />
+</p>
+
+<details>
+<summary><b>View Raw Diagram Specification (Mermaid &amp; D2)</b></summary>
+
 ```mermaid
 graph LR
     subgraph Host["🖥️ PRIMARY PC (Host)"]
@@ -149,6 +167,9 @@ graph LR
     H_NET --> STREAM --> C_NET
     H_NET <.- BEACON .-> C_NET
 ```
+
+- Declarative D2 Source: [`docs/architecture.d2`](docs/architecture.d2)
+</details>
 
 ---
 
@@ -289,30 +310,52 @@ Twin Desk includes a comprehensive 136-test automated verification suite coverin
 
 ---
 
-## ⚙️ Native Virtual Display Driver
+## ⚙️ Native Virtual Display Driver (Development & Testing)
 
-True extended desktop mode requires Windows to enumerate a virtual display adapter at the OS level. The source files are provided in [`native/idd_driver/`](native/idd_driver):
+> [!CAUTION]
+> **Important Safety & Environment Notice**:
+> Installing an unsigned/test-signed native driver modifies Windows boot policy (`bcdedit /set testsigning on`) and hardware device nodes (`devcon.exe`). **Do NOT perform initial driver testing on your primary workstation.** Always test and validate the driver build inside a **dedicated test VM (Hyper-V, VMware, or VirtualBox) or a disposable test PC**.
+>
+> **Without the driver installed, Twin Desk operates safely in high-efficiency user-mode screen-streaming mode**—no driver installation, test-signing, or elevated privileges required.
 
-### Prerequisites for Driver Compilation:
+The native Indirect Display Driver (IddCx UMDF 2.25) source code is provided in [`native/idd_driver/`](native/idd_driver):
+
+### 1. Prerequisites for Driver Compilation:
 - **Visual Studio 2022** with *Desktop development with C++*
 - **Windows 11 SDK** (10.0.22621.0 or newer)
 - **Windows Driver Kit (WDK)** compatible with your SDK version
+- **CMake** (v3.20+)
 
-### Build & Installation Steps:
+### 2. Automated Dry Run & Build (Safe)
+Test your toolchain without modifying system settings:
 ```powershell
-# 1. Enable test-signing on a dedicated test machine or VM (Admin CMD)
-bcdedit /set testsigning on
+# Safe toolchain validation (dry run):
+powershell -ExecutionPolicy Bypass -File scripts\build_driver.ps1 -DryRun
 
-# 2. Build the native driver via CMake or Visual Studio
-cd native
-mkdir build && cd build
-cmake -G "Visual Studio 17 2022" -A x64 ..
-cmake --build . --config Release
-
-# 3. Install the driver using devcon.exe
-devcon.exe install IddDriver.inf Root\DualDeskDisplay
+# Build native driver binaries:
+powershell -ExecutionPolicy Bypass -File scripts\build_driver.ps1 -BuildOnly -Configuration Release
 ```
-*For detailed driver architecture and recovery instructions, refer to [`native/README.md`](native/README.md).*
+
+### 3. Safe VM Testing & Rollback Workflow
+When ready to test on a dedicated VM:
+```powershell
+# 1. Create a System Restore Point before proceeding:
+Checkpoint-Computer -Description "Before TwinDesk Driver Install" -RestorePointType "DEVICE_DRIVER_INSTALL"
+
+# 2. Enable test-signing inside the VM (requires reboot):
+bcdedit /set testsigning on
+Restart-Computer
+
+# 3. Install the test package:
+powershell -ExecutionPolicy Bypass -File scripts\build_driver.ps1 -Install
+
+# --- ROLLBACK & RECOVERY PROCEDURE ---
+# To uninstall the virtual adapter and restore standard boot policy:
+devcon.exe remove Root\DualDeskDisplay
+bcdedit /set testsigning off
+Restart-Computer
+```
+*For deep-dive driver architecture and manual `pnputil`/`devcon` commands, see [`docs/driver-installation.md`](docs/driver-installation.md) and [`native/README.md`](native/README.md).*
 
 ---
 
@@ -328,4 +371,9 @@ devcon.exe install IddDriver.inf Root\DualDeskDisplay
 
 ## 📄 License
 
-This project is licensed under the terms chosen upon final product packaging. Native driver samples and third-party libraries retain their respective Microsoft and open-source licenses.
+This project is licensed under the **[MIT License](LICENSE)**.
+
+Third-party dependencies and native driver samples retain their respective licenses:
+- `PySide6` / Qt6: LGPLv3 / Commercial
+- `cryptography`: Apache 2.0 / BSD
+- Microsoft Windows Driver Samples (`native/idd_driver`): [MS-PL / MIT](https://github.com/microsoft/Windows-driver-samples/blob/main/LICENSE)
