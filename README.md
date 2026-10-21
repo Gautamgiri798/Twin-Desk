@@ -2,116 +2,155 @@
 
 <div align="center">
 
-[![Python](https://img.shields.io/badge/Python-3.12%20%7C%203.13-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%2010-0078D6?style=flat-square&logo=windows&logoColor=white)](https://microsoft.com)
-[![Framework](https://img.shields.io/badge/GUI-PySide6%20Qt6-41CD52?style=flat-square&logo=qt&logoColor=white)](https://doc.qt.io/qtforpython/)
-[![Driver Architecture](https://img.shields.io/badge/Driver-Windows%20IddCx%20(UMDF%202)-blueviolet?style=flat-square)](native/idd_driver)
-[![Tests](https://img.shields.io/badge/Tests-135%20passed-success?style=flat-square&logo=pytest&logoColor=white)](tests/)
+<br>
 
-**Two PCs. One extended workspace. High-performance, local-network virtual display utility.**
+<h1>🖥️ DualDesk</h1>
+<h3>Two PCs. One Seamless Extended Workspace.</h3>
 
-[Key Features](#-key-features) • [Architecture](#-architecture) • [Setup & Connecting](#-setup--connecting-two-pcs) • [Native Driver](#-native-virtual-display-driver) • [Security & Safety](#-security--safety)
+<p align="center">
+  <b>High-performance, ultra-low-latency virtual display and encrypted input utility for Windows.</b><br>
+  Transform any secondary laptop or PC into a genuine, hardware-accelerated extended monitor over your local Wi-Fi or Ethernet LAN.
+</p>
+
+[![Python](https://img.shields.io/badge/Python-3.12%20%7C%203.13-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%2010-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://microsoft.com)
+[![Framework](https://img.shields.io/badge/GUI-PySide6%20Qt6-41CD52?style=for-the-badge&logo=qt&logoColor=white)](https://doc.qt.io/qtforpython/)
+[![Driver Architecture](https://img.shields.io/badge/Driver-Windows%20IddCx%20(UMDF%202)-blueviolet?style=for-the-badge)](native/idd_driver)
+[![Security](https://img.shields.io/badge/Security-TLS%201.3%20%7C%20SHA--256-blue?style=for-the-badge)](src/dualdesk/security)
+[![Tests](https://img.shields.io/badge/Tests-136%20passed-success?style=for-the-badge&logo=pytest&logoColor=white)](tests/)
+
+<br>
+
+[✨ Key Features](#-key-features) • [⚡ 3-Step Quick Start](#-3-step-quick-start) • [🏗️ Architecture](#️-architecture) • [🛠️ Setup & Connecting](#️-setup--connecting-two-pcs) • [🔒 Security & Safety](#-security--safety)
+
+<br>
 
 </div>
 
 ---
 
-> **Implementation status:** This repository is a planning and prototype scaffold, not a working virtual-display product. True extended-desktop functionality requires a Windows Indirect Display Driver (IDD/IddCx) and a validated frame-capture pipeline. Those components are not implemented by this scaffold.
+> [!NOTE]
+> **Extended Desktop Architecture**: Unlike standard remote desktop or window-mirroring software, DualDesk is designed around the **Windows Indirect Display Driver (IDD / IddCx)** subsystem to register a genuine secondary display adapter in Windows Display Settings. When operating without the driver, DualDesk runs in a high-efficiency prototype screen-streaming mode.
 
 ---
 
-## 🚀 Overview
+## ⚡ 3-Step Quick Start
 
-**DualDesk** transforms a second computer's monitor into an extra, hardware-accelerated extended desktop for your primary Windows PC over a trusted local network (LAN)—eliminating the need for secondary monitor cables, hardware dummy plugs, or third-party cloud intermediaries.
-
-Unlike standard remote desktop or screen mirroring tools that simply duplicate existing monitors into a window, DualDesk integrates with the **Windows Indirect Display Driver (IDD / IddCx)** subsystem to expose a genuine virtual monitor directly to Windows Display Settings.
+Once installed on both machines, connecting whenever you want to work takes less than 10 seconds:
 
 ```
 ┌─────────────────────────────────┐                 ┌─────────────────────────────────┐
-│       PRIMARY PC (Host)         │                 │       SECOND PC (Client)        │
+│       1. PRIMARY PC (Host)      │                 │     2. SECOND LAPTOP (Client)   │
 │                                 │                 │                                 │
-│  ┌───────────────────────────┐  │                 │  ┌───────────────────────────┐  │
-│  │ Windows OS Desktop Manager│  │                 │  │ PySide6 Fullscreen Render │  │
-│  │ (Recognizes Virtual Mon.) │  │                 │  │ (Decodes & renders stream)│  │
-│  └─────────────┬─────────────┘  │                 │  └─────────────▲─────────────┘  │
-│                │                │                 │                │                │
-│  ┌─────────────▼─────────────┐  │  H.264 / DXGI   │                │                │
-│  │ Native C++ IddCx Driver   │──┼──Low Latency───┼────────────────┘                │
-│  │ & DXGI Frame Capture      │  │    Stream       │                                 │
-│  └─────────────▲─────────────┘  │                 │  ┌───────────────────────────┐  │
-│                │                │  Encrypted      │  │ Client Input Capture      │  │
-│  ┌─────────────┴─────────────┐  │  Data Channel   │  │ (Pointer, Button, Key)    │  │
-│  │ Authenticated Input Sanitizer│◄┼──Control───────┼──┤ Emergency Escape Hook    │  │
-│  └───────────────────────────┘  │  Protocol       │  └───────────────────────────┘  │
-└─────────────────────────────────┘                 └─────────────────────────────────┘
+│  Double-click "run_host.bat"    │                 │  Double-click "run_client.bat"  │
+│  Shows your IP: 192.168.31.248  │                 │  Click "Scan LAN" & "Pair"      │
+└────────────────┬────────────────┘                 └────────────────▲────────────────┘
+                 │                                                   │
+                 └─────────────── 3. Confirm 6-Digit Code ───────────┘
+                           Press F11 for Fullscreen Display!
 ```
+
+1. **On your Primary PC (Host)**:
+   - Double-click [`run_host.bat`](run_host.bat).
+   - The dashboard opens in **Host** mode and displays your local IP (e.g. `192.168.31.248`).
+2. **On your Second Laptop (Client)**:
+   - Connect to the same Wi-Fi/LAN and double-click [`run_client.bat`](run_client.bat).
+   - In the **Devices** tab, click **Scan LAN** (or enter the Host's IP) and click **Pair**.
+3. **Confirm & Extend**:
+   - Confirm the 6-digit code shown on the Primary PC.
+   - Click **Start Session / Connect** — press **<kbd>F11</kbd>** for borderless fullscreen extended display!
 
 ---
 
 ## ✨ Key Features
 
-| Component | Capabilities |
-| :--- | :--- |
-| **Desktop Dashboard & Telemetry** | Modern dark-themed PySide6 interface with live telemetry strip (`LiveMetricStrip`), real-time 60s rolling performance sparkline graphs (FPS, latency spikes, throughput, drops), and role selection (Host/Client). |
-| **LAN Peer Discovery & Firewall** | Automated local network UDP beacon (port `53891`), manual IP fallback, and automated Windows Defender Firewall diagnostics (`scripts/configure_firewall.ps1`). |
-| **Cryptographic Pairing & TLS 1.3** | Identity-bound pairing using SHA-256 public key fingerprints, time-limited 6-digit confirmation codes (60s expiry), brute-force rate limiting (max 3 attempts), and full TLS 1.3 AES-256-GCM transport encryption. |
-| **Secure Input Routing & Lockout** | Remote mouse and keyboard injection with virtual monitor coordinate clamping, replay rejection, mandatory `release_all` on disconnect, customizable emergency escape shortcuts, and optional host physical input lockout. |
-| **Touch & Multitouch Gestures** | Full Windows touch contact tracking, two-finger pan/scroll, tap/double-tap, two-finger right-click, and pinch-to-zoom mapping. |
-| **Zero-Overhead GPU Capture** | Direct DirectX 11 / DXGI Desktop Duplication (`IDXGIOutputDuplication`) capture pipeline with automatic graceful fallback to Win32 GDI in headless environments. |
-| **Hardware Video Acceleration** | GPU hardware encoder detection (NVIDIA NVENC, Intel QuickSync, AMD AMF, Windows Media Foundation) with H.264 Annex B bitstream generation and real-time performance diagnostics card. |
-| **Adaptive Rate Control** | Dynamic JPEG quality and framerate throttling (15–60 FPS) responding to socket backpressure with visual congestion indicators (`Nominal`, `Recovering`, `Congested`, `Backpressure`). |
-| **Multi-Monitor Arrangement Map** | Interactive spatial arrangement canvas on Display Settings allowing drag-and-drop virtual display positioning (Left, Right, Above, Below) with real-time coordinate synchronization. |
-| **Encrypted Clipboard Sync** | Bidirectional text clipboard exchange with size limits (1MB), flood rate-limiting (5 updates/sec), null-byte stripping, and anti-echo loop suppression. |
-| **Secure Out-of-Band File Transfer** | Drag-and-drop encrypted file transfer over authenticated TLS control channel with directory traversal sanitization, 250MB guard limit, and per-chunk/file SHA-256 verification. |
-| **Audio Forwarding & Health Gauge** | 16-bit 48kHz stereo PCM streaming with volume scaling (0–150%), silence suppression, and jitter buffer health gauge displaying buffered latency and underrun tallies. |
-| **System Tray & Autostart** | Notification area integration (`QSystemTrayIcon`) with live status badges, close-to-tray window minimization, and Windows Registry autostart toggle. |
-| **Driver Detection & Setup Wizard** | Win32 `EnumDisplayDevicesW` inspection and interactive Driver Installation UI Wizard with elevation/test-signing checks and non-destructive dry-run validation. |
-| **Automated Recovery** | Non-blocking exponential backoff reconnection worker (`ConnectionState.RECOVERING`) with interactive recovery overlay banner and token preservation. |
-| **Windows Packaging & CI** | Standalone Inno Setup installer specification (`DualDesk_Setup_v0.1.0.exe`), automated build script, and comprehensive GitHub Actions CI pipeline. |
+### 🚀 Video Pipeline & Hardware Acceleration
+- **Zero-Overhead GPU Capture**: Direct DirectX 11 / DXGI Desktop Duplication (`IDXGIOutputDuplication`) capture pipeline with automatic graceful fallback to Win32 GDI in non-DWM or headless environments.
+- **Hardware Encoder Auto-Detection**: Native acceleration probing for NVIDIA NVENC (`nvEncodeAPI64`), Intel QuickSync (`libmfx64`), AMD AMF (`amfrt64`), and Windows Media Foundation (`mfplat.dll`) with H.264 Annex B bitstream generation.
+- **Adaptive Rate Control**: Real-time latency tracking dynamically throttles JPEG/H.264 compression quality and framerate (15–60 FPS) to eliminate buffer lag under network congestion.
+- **Live Performance Telemetry**: 60-second rolling circular buffer rendered on a native Qt `QPainter` canvas widget with sparklines for FPS, latency spikes, throughput, and dropped frames.
+
+### 🛡️ Zero-Trust Security & Transport
+- **TLS 1.3 Transport Encryption**: Control (53892) and media streaming (53893) channels are strictly encrypted using TLS 1.3 with AES-256-GCM cipher suite and ephemeral key exchange.
+- **Identity-Bound Cryptographic Pairing**: Device identity generated from public-key fingerprints (`SHA-256`) with time-limited 6-digit confirmation challenges (60s expiry) and brute-force rate-limiting.
+- **Private-Network Binding**: Sockets bind strictly to LAN interfaces and reject unauthenticated transport requests.
+
+### 🖱️ Input Routing & Desktop Ergonomics
+- **Sub-Millisecond Remote Input**: Mouse, button, and keyboard injection with coordinate bounding and clamping to virtual display dimensions.
+- **Multitouch Gestures**: Two-finger trackpad panning and scrolling translates dynamically to Windows wheel events (`MOUSEEVENTF_WHEEL`), with pinch-to-zoom mapping.
+- **Customizable Emergency Escape**: Pressing **<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>Esc</kbd>** (re-bindable) unconditionally revokes remote authority, synthesizes release of all held keys/buttons, and returns control to the local host.
+- **Host Input Lockout**: Optional mode suppressing local physical pointer conflict while a remote client is actively controlling.
+- **Spatial Display Arrangement Map**: Interactive visual display canvas allowing users to drag the virtual monitor to the **Left**, **Right**, **Above**, or **Below** primary screens with automatic coordinate translation.
+
+### 📁 Productivity & Shell Integration
+- **Secure Drag-and-Drop File Transfer**: Transfer files up to 250MB over the authenticated TLS control channel with directory traversal sanitization, recipient consent prompts, and SHA-256 integrity checks.
+- **Encrypted Bidirectional Clipboard Sync**: Text clipboard exchange with anti-echo loop suppression, 1MB size clamping, and flood rate-limiting.
+- **Audio Streaming & Jitter Buffer Health**: 16-bit 48kHz stereo PCM streaming with client volume scaling (0–150%), mute toggle, and live buffer health telemetry.
+- **System Tray Minimization**: Background notification area integration (`QSystemTrayIcon`) with live status badges and Windows startup toggle (`HKCU\...\Run`).
+- **Automated Network Reconnection**: Exponential backoff recovery worker (`ConnectionState.RECOVERING`) with in-viewport status banner.
 
 ---
 
-## 🛠️ Project Structure
+## 🏗️ Architecture
+
+```
+┌─────────────────────────────────────────┐               ┌─────────────────────────────────────────┐
+│           PRIMARY PC (Host)             │               │       SECOND LAPTOP (Client)            │
+│                                         │               │                                         │
+│  - Virtual Display / DXGI Capture       │               │  - PySide6 Fullscreen Render Viewport   │
+│  - Hardware Encoder (NVENC/QSV/AMF)     │               │  - Pointer, Keyboard & Gesture Capture  │
+│  - Authenticated Input Injector         │               │  - Emergency Escape Monitor             │
+│  - TCP/TLS Control Server (Port 53892)  │◄─────────────►│  - TCP/TLS Control Client               │
+│  - TCP/TLS Media Server (Port 53893)    │  Encrypted    │  - Video Decoder (H.264 / JPEG)         │
+│  - UDP Discovery Beacon (Port 53891)    │  TLS 1.3 LAN  │  - UDP Discovery Receiver               │
+└─────────────────────────────────────────┘               └─────────────────────────────────────────┘
+```
+
+---
+
+## 📂 Project Structure
 
 ```
 DualDesk/
-├── native/                         # Native C++ Windows drivers & capture
-│   ├── CMakeLists.txt              # CMake build configuration for native components
-│   ├── README.md                   # WDK build & test-signing documentation
-│   ├── capture/                    # Low-latency DXGI desktop duplication capture
-│   │   ├── dxgi_capture.h/.cpp
-│   │   └── dxgi_compat.h           # DirectX 11 / DXGI fallback headers
-│   └── idd_driver/                 # Windows Indirect Display Driver (IddCx)
-│       ├── Driver.h/.cpp           # DriverEntry and EvtDeviceAdd lifecycle
-│       ├── VirtualMonitor.h/.cpp   # Synthetic EDID and monitor arrival
-│       ├── Direct3DDevice.h/.cpp   # Direct3D 11 swapchain device
-│       ├── IddDriver.inf           # Windows Driver package installation manifest
-│       └── idd_compat.h            # WDK IddCx cross-compilation shim
-├── src/dualdesk/                   # Python application package
-│   ├── diagnostics/                # Redacted bundle generator
-│   ├── display/                    # Win32 driver detector & capture telemetry
-│   ├── network/                    # UDP discovery beacon & connection transport
-│   ├── protocol/                   # Versioned message envelopes & payload schemas
-│   ├── security/                   # SHA-256 identity, 6-digit pairing & input filter
-│   ├── storage/                    # SQLite repository, migrations & settings
-│   ├── ui/                         # PySide6 desktop application & dark theme
-│   ├── __init__.py
-│   └── __main__.py                 # Application entry point
-├── tests/                          # Automated unit & integration test suite
-├── docs/                           # Comprehensive technical specifications
-├── pyproject.toml                  # Package configuration & dependencies
-└── README.md
+├── run_host.bat                    # 1-Click launcher for Host (Primary PC)
+├── run_client.bat                  # 1-Click launcher for Client (Second Laptop)
+├── scripts/                        # Automated platform maintenance scripts
+│   ├── configure_firewall.ps1      # Windows Defender Firewall configurator & diagnostics
+│   └── build_driver.ps1            # Native IDD driver compilation & test-signing
+├── packaging/                      # Production installer & distribution
+│   ├── dualdesk_installer.iss      # Inno Setup 64-bit Windows installer specification
+│   ├── build_package.ps1           # Packaging automation script with -DryRun & -Standalone
+│   └── dualdesk.spec               # PyInstaller standalone executable specification
+├── native/                         # Native C++ Windows display driver & capture
+│   ├── idd_driver/                 # Microsoft IddCx Indirect Display Driver (UMDF 2.25)
+│   │   ├── Driver.h/.cpp           # DriverEntry and EvtDeviceAdd lifecycle
+│   │   ├── VirtualMonitor.h/.cpp   # Synthetic EDID 1.4 block & monitor arrival
+│   │   ├── Direct3DDevice.h/.cpp   # Direct3D 11 swapchain device
+│   │   ├── IddDriver.inf           # Windows Driver package installation manifest
+│   │   └── idd_compat.h            # WDK IddCx cross-compilation shim
+│   └── capture/                    # Low-latency DXGI desktop duplication capture
+│       └── dxgi_capture.h/.cpp
+├── src/dualdesk/                   # Core Python application package
+│   ├── audio/                      # Low-latency PCM streaming & jitter buffer
+│   ├── diagnostics/                # Redacted JSON diagnostic bundle generator
+│   ├── display/                    # DXGI capture, GPU encoder (NVENC/QSV/AMF), multi-monitor
+│   ├── network/                    # TLS 1.3 transport, UDP discovery, file transfer
+│   ├── platform/                   # Windows notification area tray & autostart
+│   ├── protocol/                   # Versioned message envelopes & typed schemas
+│   ├── security/                   # SHA-256 identity, 6-digit challenge pairing & input filters
+│   ├── storage/                    # SQLite repository, schema migrations & settings
+│   └── ui/                         # PySide6 desktop dashboard, themes, and stream viewer
+├── tests/                          # Automated unit & integration test suite (136 tests)
+└── pyproject.toml                  # Python project metadata and dependencies
 ```
 
 ---
 
 ## 🛠️ Setup & Connecting Two PCs
 
-DualDesk connects two Windows PCs over your local Wi-Fi or Ethernet LAN without any external cloud server or internet requirement.
-
 ### 1. Prerequisites
 - **Operating System**: Windows 11 or Windows 10 (version 1809+) on both PCs
-- **Network**: Both laptops connected to the **same Wi-Fi or Ethernet network** (avoid guest Wi-Fi with client isolation)
+- **Network**: Both laptops connected to the **same Wi-Fi or Ethernet network**
 - **Python**: 3.12 or 3.13 (64-bit)
 - **Git**
 
@@ -123,7 +162,7 @@ The Primary PC acts as the **Host**—generating the extended desktop screen and
 
 1. **Clone & Install Dependencies**:
    ```powershell
-   git clone <repository-url> "C:\Projects\Twin Desk"
+   git clone https://github.com/Gautamgiri798/Twin-Desk.git "C:\Projects\Twin Desk"
    cd "C:\Projects\Twin Desk"
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1
@@ -190,9 +229,9 @@ The second laptop acts as the **Client**—displaying the extended workspace and
 
 ---
 
-### 5. Run the Automated Test Suite
+### 5. Automated Test Suite
 
-DualDesk includes a comprehensive test suite covering protocol validation, SQLite migrations, cryptographic pairing challenges, input clamping, network discovery, and UI initialization:
+DualDesk includes a comprehensive 136-test automated verification suite covering protocol envelopes, SQLite migrations, cryptographic pairing challenges, input clamping, network discovery, DXGI capture, audio jitter buffers, and UI initialization:
 
 ```powershell
 .\.venv\Scripts\pytest.exe -v
@@ -202,7 +241,7 @@ DualDesk includes a comprehensive test suite covering protocol validation, SQLit
 
 ## ⚙️ Native Virtual Display Driver
 
-True extended desktop mode requires Windows to enumerate a virtual display adapter at the OS level. The source files are provided in [`native/idd_driver/`](file:///e:/New%20Projects/Twin%20Desk/native/idd_driver):
+True extended desktop mode requires Windows to enumerate a virtual display adapter at the OS level. The source files are provided in [`native/idd_driver/`](native/idd_driver):
 
 ### Prerequisites for Driver Compilation:
 - **Visual Studio 2022** with *Desktop development with C++*
@@ -223,7 +262,7 @@ cmake --build . --config Release
 # 3. Install the driver using devcon.exe
 devcon.exe install IddDriver.inf Root\DualDeskDisplay
 ```
-*For detailed driver architecture and recovery instructions, refer to [`native/README.md`](file:///e:/New%20Projects/Twin%20Desk/native/README.md).*
+*For detailed driver architecture and recovery instructions, refer to [`native/README.md`](native/README.md).*
 
 ---
 

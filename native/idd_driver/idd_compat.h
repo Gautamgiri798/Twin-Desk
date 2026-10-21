@@ -51,12 +51,18 @@
   typedef void* WDFDRIVER;
   typedef void* WDFDEVICE;
   typedef void* PWDFDEVICE_INIT;
-  typedef void* WDF_OBJECT_ATTRIBUTES;
+  struct WDF_OBJECT_ATTRIBUTES {
+      unsigned long Size;
+      void* ExecutionLevel;
+      void* SynchronizationScope;
+  };
+  typedef WDF_OBJECT_ATTRIBUTES* PWDF_OBJECT_ATTRIBUTES;
+
   typedef void* WDF_NO_HANDLE_TYPE;
   typedef unsigned char BYTE;
 
   #define WDF_NO_HANDLE ((WDF_NO_HANDLE_TYPE)0)
-  #define WDF_NO_OBJECT_ATTRIBUTES nullptr
+  #define WDF_NO_OBJECT_ATTRIBUTES ((PWDF_OBJECT_ATTRIBUTES)nullptr)
 
   typedef NTSTATUS DRIVER_INITIALIZE(PDRIVER_OBJECT, PUNICODE_STRING);
   typedef NTSTATUS EVT_WDF_DRIVER_DEVICE_ADD(WDFDRIVER, PWDFDEVICE_INIT);
@@ -75,13 +81,28 @@
       }
   }
 
-  inline NTSTATUS WdfDriverCreate(PDRIVER_OBJECT, PUNICODE_STRING, void*, WDF_DRIVER_CONFIG*, void*) {
+  inline NTSTATUS WdfDriverCreate(
+      PDRIVER_OBJECT,
+      PUNICODE_STRING,
+      PWDF_OBJECT_ATTRIBUTES,
+      WDF_DRIVER_CONFIG*,
+      void*
+  ) {
       return STATUS_SUCCESS;
   }
 
-  inline void WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(void*, void*) {}
+  #define WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(_attributes, _contextType) \
+      do { \
+          if ((_attributes) != nullptr) { \
+              (_attributes)->Size = sizeof(*(_attributes)); \
+          } \
+      } while (0)
 
-  inline NTSTATUS WdfDeviceCreate(PWDFDEVICE_INIT*, void*, WDFDEVICE*) {
+  inline NTSTATUS WdfDeviceCreate(
+      PWDFDEVICE_INIT*,
+      PWDF_OBJECT_ATTRIBUTES,
+      WDFDEVICE*
+  ) {
       return STATUS_SUCCESS;
   }
 

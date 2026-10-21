@@ -4,12 +4,12 @@
 
 extern "C" {
     NTSTATUS DriverEntry(
-        PDRIVER_OBJECT DriverObject,
-        PUNICODE_STRING RegistryPath
+        _In_ PDRIVER_OBJECT DriverObject,
+        _In_ PUNICODE_STRING RegistryPath
     );
     NTSTATUS EvtDeviceAdd(
-        WDFDRIVER Driver,
-        PWDFDEVICE_INIT DeviceInit
+        _In_ WDFDRIVER Driver,
+        _Inout_ PWDFDEVICE_INIT DeviceInit
     );
 }
 

@@ -19,7 +19,7 @@ extern "C" NTSTATUS DriverEntry(
     return status;
 }
 
-NTSTATUS EvtDeviceAdd(
+extern "C" NTSTATUS EvtDeviceAdd(
     _In_ WDFDRIVER Driver,
     _Inout_ PWDFDEVICE_INIT DeviceInit
 ) {
