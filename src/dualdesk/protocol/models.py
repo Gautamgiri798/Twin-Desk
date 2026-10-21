@@ -193,6 +193,20 @@ class DisplayModeRequestPayload:
 
 
 @dataclass
+class DisplayModeAcceptPayload:
+    width: int
+    height: int
+    refresh_rate: int
+    mode_name: str = ""
+
+
+@dataclass
+class DisplayModeRejectPayload:
+    reason: str
+    supported_modes: list[DisplayMode] = field(default_factory=list)
+
+
+@dataclass
 class DisplayStatePayload:
     is_active: bool
     mode: DisplayMode

@@ -106,6 +106,8 @@ class DualDeskApp(QMainWindow):
             on_state_changed=self._on_connection_state_changed,
             on_telemetry_updated=self._on_telemetry_updated,
             on_frame_received=self._on_stream_frame_received,
+            on_display_mode_changed=self._on_display_mode_changed,
+            on_display_mode_negotiated=self._on_client_display_mode_negotiated,
         )
         self.stream_viewer = StreamViewerWidget(self.connection_manager, self)
         if self.role == "host":
@@ -553,12 +555,21 @@ class DualDeskApp(QMainWindow):
     # Event handlers
     def _on_resolution_changed(self, idx: int) -> None:
         mode = self.res_combo.currentData()
-        if mode:
-            self.capture_adapter.width = mode.width
-            self.capture_adapter.height = mode.height
-            self.capture_adapter.target_fps = mode.refresh_rate
+        if not mode:
+            return
+
+        if self.role == "client":
+            if self.connection_manager.state == ConnectionState.STREAMING:
+                self.connection_manager.request_display_mode(mode.width, mode.height, mode.refresh_rate)
+        else:
+            self.capture_adapter.set_resolution(mode.width, mode.height, mode.refresh_rate)
             if self.connection_manager.input_filter:
                 self.connection_manager.input_filter.update_bounds(mode.width, mode.height)
+            if self.connection_manager.input_injector:
+                self.connection_manager.input_injector.display_width = mode.width
+                self.connection_manager.input_injector.display_height = mode.height
+            if self.connection_manager.state == ConnectionState.STREAMING:
+                self.connection_manager.broadcast_display_mode(mode)
 
     def _on_preset_changed(self, idx: int) -> None:
         bitrates = [4000, 6000, 12000]
@@ -662,6 +673,42 @@ class DualDeskApp(QMainWindow):
             self.card_stream.update_values("Inactive", "No active frame transmission.", is_active=False)
             self.btn_connect.setText("Start Session")
             self.connection_manager.clipboard_adapter.stop_monitoring()
+
+    def _on_display_mode_changed(self, width: int, height: int, fps: int) -> None:
+        """Adapts capture resolution on host when remote client negotiates target mode."""
+        self.capture_adapter.set_resolution(width, height, fps)
+        if self.connection_manager.input_filter:
+            self.connection_manager.input_filter.update_bounds(width, height)
+        if self.connection_manager.input_injector:
+            self.connection_manager.input_injector.display_width = width
+            self.connection_manager.input_injector.display_height = height
+        self._sync_res_combo(width, height, fps)
+
+    def _on_client_display_mode_negotiated(self, width: int, height: int, fps: int) -> None:
+        """Synchronizes target resolution dropdown when host accepts negotiated mode."""
+        self._sync_res_combo(width, height, fps)
+
+    def _sync_res_combo(self, width: int, height: int, fps: int) -> None:
+        if not hasattr(self, "res_combo"):
+            return
+        self.res_combo.blockSignals(True)
+        try:
+            matched_idx = -1
+            for i in range(self.res_combo.count()):
+                mode = self.res_combo.itemData(i)
+                if mode and mode.width == width and mode.height == height and mode.refresh_rate == fps:
+                    matched_idx = i
+                    break
+            if matched_idx == -1:
+                for i in range(self.res_combo.count()):
+                    mode = self.res_combo.itemData(i)
+                    if mode and mode.width == width and mode.height == height:
+                        matched_idx = i
+                        break
+            if matched_idx != -1:
+                self.res_combo.setCurrentIndex(matched_idx)
+        finally:
+            self.res_combo.blockSignals(False)
 
     def _on_telemetry_updated(self, telemetry: SessionTelemetry) -> None:
         self.metric_strip.update_metrics(

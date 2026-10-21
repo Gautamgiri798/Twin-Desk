@@ -15,11 +15,13 @@ from typing import Any
 from dualdesk.audio.capture import AudioCaptureAdapter, AudioFrame, AudioPlayerAdapter
 from dualdesk.display.adaptive import AdaptiveRateController
 from dualdesk.display.clipboard import ClipboardAdapter
+from dualdesk.display.driver import get_supported_modes, negotiate_target_mode
 from dualdesk.display.input_injector import InputInjector
 from dualdesk.protocol.models import (
     AudioFramePayload,
     ButtonPayload,
     ClipboardUpdatePayload,
+    DisplayMode,
     ErrorCode,
     GesturePayload,
     KeyPayload,
@@ -119,6 +121,8 @@ class ConnectionManager:
         on_frame_sent: Callable[[float, int], None] | None = None,
         on_audio_received: Callable[[AudioFrame], None] | None = None,
         on_clipboard_received: Callable[[str], None] | None = None,
+        on_display_mode_changed: Callable[[int, int, int], None] | None = None,
+        on_display_mode_negotiated: Callable[[int, int, int], None] | None = None,
     ) -> None:
         self.db = db
         self.pairing_manager = pairing_manager
@@ -142,6 +146,9 @@ class ConnectionManager:
         self.on_frame_sent = on_frame_sent
         self.on_audio_received = on_audio_received
         self.on_clipboard_received = on_clipboard_received
+        self.on_display_mode_changed = on_display_mode_changed
+        self.on_display_mode_negotiated = on_display_mode_negotiated
+        self.current_display_mode = DisplayMode(1920, 1080, 60)
 
         self.last_send_latency_ms: float = 0.0
         self._tls_server_context: ssl.SSLContext | None = None
@@ -402,6 +409,44 @@ class ConnectionManager:
                 )
             _send_envelope(sock, resp)
 
+        elif msg_type == MessageType.DISPLAY_MODE_REQUEST.value:
+            req_w = int(env.payload.get("width", 1920))
+            req_h = int(env.payload.get("height", 1080))
+            req_fps = int(env.payload.get("refresh_rate", 60))
+
+            if req_w < 320 or req_h < 180 or req_w > 7680 or req_h > 4320:
+                reject_env = MessageEnvelope(
+                    type=MessageType.DISPLAY_MODE_REJECT.value,
+                    session_id=self.active_session_id or "",
+                    sequence=self._sequence_counter,
+                    payload={
+                        "reason": f"Resolution {req_w}x{req_h} out of supported bounds",
+                        "supported_modes": [asdict(m) for m in get_supported_modes()],
+                    },
+                )
+                _send_envelope(sock, reject_env)
+            else:
+                mode = negotiate_target_mode(req_w, req_h, req_fps)
+                self.current_display_mode = mode
+                if self.input_injector:
+                    self.input_injector.display_width = mode.width
+                    self.input_injector.display_height = mode.height
+                if self.on_display_mode_changed:
+                    self.on_display_mode_changed(mode.width, mode.height, mode.refresh_rate)
+
+                accept_env = MessageEnvelope(
+                    type=MessageType.DISPLAY_MODE_ACCEPT.value,
+                    session_id=self.active_session_id or "",
+                    sequence=self._sequence_counter,
+                    payload={
+                        "width": mode.width,
+                        "height": mode.height,
+                        "refresh_rate": mode.refresh_rate,
+                        "mode_name": mode.name,
+                    },
+                )
+                _send_envelope(sock, accept_env)
+
         elif msg_type == MessageType.INPUT_POINTER.value:
             payload = PointerPayload(
                 x=float(env.payload["x"]),
@@ -508,6 +553,29 @@ class ConnectionManager:
             session_id=self.active_session_id or "",
             sequence=frame.sequence,
             payload=asdict(frame.to_payload()),
+        )
+        try:
+            _send_envelope(sock, env)
+            return True
+        except OSError:
+            return False
+
+    def broadcast_display_mode(self, mode: DisplayMode) -> bool:
+        """Broadcasts active display mode to the connected peer over the control channel."""
+        sock = self._active_client_sock or self._client_sock
+        if not sock or self.state != ConnectionState.STREAMING:
+            return False
+        self._sequence_counter += 1
+        env = MessageEnvelope(
+            type=MessageType.DISPLAY_MODE_ACCEPT.value,
+            session_id=self.active_session_id or "",
+            sequence=self._sequence_counter,
+            payload={
+                "width": mode.width,
+                "height": mode.height,
+                "refresh_rate": mode.refresh_rate,
+                "mode_name": mode.name,
+            },
         )
         try:
             _send_envelope(sock, env)
@@ -794,6 +862,16 @@ class ConnectionManager:
                             return
                         elif env.type == MessageType.AUDIO_FRAME.value:
                             self._handle_incoming_audio(env)
+                        elif env.type == MessageType.DISPLAY_MODE_ACCEPT.value:
+                            w = int(env.payload.get("width", 1920))
+                            h = int(env.payload.get("height", 1080))
+                            fps = int(env.payload.get("refresh_rate", 60))
+                            name = str(env.payload.get("mode_name", f"{w}x{h} @ {fps}Hz"))
+                            self.current_display_mode = DisplayMode(w, h, fps, name)
+                            if self.on_display_mode_negotiated:
+                                self.on_display_mode_negotiated(w, h, fps)
+                        elif env.type == MessageType.DISPLAY_MODE_REJECT.value:
+                            pass
                     except ProtocolError:
                         continue
         except OSError:
@@ -801,6 +879,28 @@ class ConnectionManager:
         finally:
             if self.state == ConnectionState.STREAMING:
                 self.disconnect(reason="Host connection lost")
+
+    def request_display_mode(self, width: int, height: int, refresh_rate: int = 60) -> bool:
+        """Sends a display mode adaptation request to the host over the control channel."""
+        sock = self._client_sock
+        if not sock or self.state != ConnectionState.STREAMING:
+            return False
+        self._sequence_counter += 1
+        env = MessageEnvelope(
+            type=MessageType.DISPLAY_MODE_REQUEST.value,
+            session_id=self.active_session_id or "",
+            sequence=self._sequence_counter,
+            payload={
+                "width": width,
+                "height": height,
+                "refresh_rate": refresh_rate,
+            },
+        )
+        try:
+            _send_envelope(sock, env)
+            return True
+        except OSError:
+            return False
 
     def send_pointer(self, x: float, y: float, normalized: bool = False) -> None:
         if not self._client_sock or self.state != ConnectionState.STREAMING:

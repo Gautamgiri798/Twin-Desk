@@ -11,6 +11,7 @@ from dualdesk.display.driver import (
     DisplayDriverStatus,
     check_virtual_display_driver,
     get_supported_modes,
+    negotiate_target_mode,
 )
 from dualdesk.display.dxgi_capture import DXGICaptureAdapter, DXGIFrame
 from dualdesk.display.encoder import (
@@ -57,6 +58,7 @@ __all__ = [
     "enable_per_monitor_dpi_awareness",
     "get_dpi_for_point",
     "get_supported_modes",
+    "negotiate_target_mode",
     "parse_annex_b_nalus",
     "scale_coordinate_between_displays",
 ]

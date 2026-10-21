@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -9,12 +9,13 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QPixmap,
+    QResizeEvent,
     QWheelEvent,
 )
 from PySide6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
 
 from dualdesk.display.decoder import VideoDecoderAdapter
-from dualdesk.network.transport import ConnectionManager
+from dualdesk.network.transport import ConnectionManager, ConnectionState
 
 
 class StreamViewerWidget(QWidget):
@@ -22,6 +23,7 @@ class StreamViewerWidget(QWidget):
     Live video rendering surface for the client PC.
     Renders incoming screen stream frames and forwards pointer, button,
     and keyboard events back to the host with emergency escape protection.
+    Automatically negotiates display mode resolution with host on window resize.
     """
 
     def __init__(
@@ -40,6 +42,27 @@ class StreamViewerWidget(QWidget):
         self._render_rect: QRectF | None = None
         self._stream_width = 1920
         self._stream_height = 1080
+
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(300)
+        self._resize_timer.timeout.connect(self._on_debounced_resize)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if (
+            self.connection_manager.state == ConnectionState.STREAMING
+            and self.connection_manager.role == "client"
+        ):
+            self._resize_timer.start()
+
+    def _on_debounced_resize(self) -> None:
+        w = max(320, self.width())
+        h = max(180, self.height())
+        # Round to even dimensions for video encoding
+        w = (w // 2) * 2
+        h = (h // 2) * 2
+        self.connection_manager.request_display_mode(w, h)
 
     def update_frame(self, frame_bytes: bytes) -> None:
         """Receives incoming compressed frame bytes (H.264 NAL or JPEG) and triggers repaint."""

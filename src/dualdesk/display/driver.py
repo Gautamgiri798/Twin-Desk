@@ -29,6 +29,44 @@ def get_supported_modes() -> list[DisplayMode]:
     ]
 
 
+def negotiate_target_mode(
+    requested_width: int,
+    requested_height: int,
+    requested_fps: int = 60,
+    supported_modes: list[DisplayMode] | None = None,
+) -> DisplayMode:
+    """
+    Selects the best matching supported display mode for a requested resolution and refresh rate.
+    Picks exact match if available, or closest mode by aspect ratio, resolution Euclidean distance, and refresh rate.
+    """
+    modes = supported_modes or get_supported_modes()
+    if not modes:
+        return DisplayMode(requested_width, requested_height, requested_fps)
+
+    # 1. Exact match
+    for m in modes:
+        if m.width == requested_width and m.height == requested_height and m.refresh_rate == requested_fps:
+            return m
+
+    # 2. Resolution match with closest refresh rate
+    res_matches = [m for m in modes if m.width == requested_width and m.height == requested_height]
+    if res_matches:
+        return min(res_matches, key=lambda m: abs(m.refresh_rate - requested_fps))
+
+    # 3. Closest resolution prioritizing aspect ratio and pixel area
+    req_pixels = requested_width * requested_height
+    req_aspect = requested_width / max(1, requested_height)
+
+    def mode_distance(m: DisplayMode) -> float:
+        aspect = m.width / max(1, m.height)
+        aspect_penalty = abs(aspect - req_aspect) * 1000.0
+        pixel_diff = abs((m.width * m.height) - req_pixels) / 1000.0
+        fps_diff = abs(m.refresh_rate - requested_fps)
+        return aspect_penalty + pixel_diff + fps_diff
+
+    return min(modes, key=mode_distance)
+
+
 class DISPLAY_DEVICEW(ctypes.Structure):
     _fields_ = [
         ("cb", ctypes.c_ulong),

@@ -149,6 +149,18 @@ class ScreenCaptureAdapter:
         if self.dxgi_adapter:
             self.dxgi_adapter.cleanup()
 
+    def set_resolution(self, width: int, height: int, target_fps: int | None = None) -> None:
+        """Dynamically adapts stream capture resolution and target framerate."""
+        self.width = max(320, width)
+        self.height = max(180, height)
+        if target_fps is not None and target_fps > 0:
+            self.target_fps = target_fps
+        if self.encoder:
+            self.encoder.config.width = self.width
+            self.encoder.config.height = self.height
+            if target_fps is not None and target_fps > 0:
+                self.encoder.config.target_fps = self.target_fps
+
     def capture_next_frame(self) -> tuple[bytes | None, CaptureStats]:
         """
         Captures the next frame from the display and returns the compressed frame bytes and telemetry.
