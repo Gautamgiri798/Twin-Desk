@@ -139,7 +139,10 @@ def test_end_to_end_tls_control_and_media_streaming() -> None:
 
             # 3. Stream frame over TLS 1.3 media channel
             test_frame = b"\xFF\xD8\xFF\xE0TEST_SECURE_FRAME\xFF\xD9"
-            time.sleep(0.3)
+            ready_deadline = time.time() + 3.0
+            while not host_cm._media_client_sock and time.time() < ready_deadline:
+                time.sleep(0.05)
+
             sent = host_cm.broadcast_frame(test_frame)
             assert sent is True, "Broadcasting frame over TLS media channel must succeed"
 
