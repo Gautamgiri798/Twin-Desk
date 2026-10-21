@@ -320,10 +320,11 @@ class DualDeskApp(QMainWindow):
 
         # Host & Client Device Cards
         devices_row = QHBoxLayout()
+        role_title = "Local Machine (Host)" if self.role == "host" else "Local Machine (Client)"
         self.host_card = DeviceCard(
-            "Local Machine (Host)",
+            role_title,
             self.identity.display_name,
-            "127.0.0.1",
+            f"{self.local_ip} (Port 53892)",
             self.identity.fingerprint,
         )
         self.client_card = DeviceCard(
@@ -1313,12 +1314,21 @@ class DualDeskApp(QMainWindow):
         event.accept()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     enable_per_monitor_dpi_awareness()
+    args_list = sys.argv[1:] if argv is None else argv
+
+    role_override = None
+    for i, arg in enumerate(args_list):
+        if arg in ("--role", "-r") and i + 1 < len(args_list):
+            role_override = args_list[i + 1].lower()
+        elif arg.startswith("--role="):
+            role_override = arg.split("=", 1)[1].lower()
+
     app = QApplication(sys.argv)
     app.setApplicationName("DualDesk")
     app.setStyleSheet(DARK_THEME_QSS)
-    window = DualDeskApp()
+    window = DualDeskApp(role_override=role_override)
     window.show()
     return app.exec()
 

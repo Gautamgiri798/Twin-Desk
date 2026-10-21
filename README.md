@@ -10,7 +10,7 @@
 
 **Two PCs. One extended workspace. High-performance, local-network virtual display utility.**
 
-[Key Features](#-key-features) • [Architecture](#-architecture) • [Quick Start](#-quick-start) • [Native Driver](#-native-virtual-display-driver) • [Security & Safety](#-security--safety) • [Documentation](#-documentation)
+[Key Features](#-key-features) • [Architecture](#-architecture) • [Setup & Connecting](#-setup--connecting-two-pcs) • [Native Driver](#-native-virtual-display-driver) • [Security & Safety](#-security--safety)
 
 </div>
 
@@ -105,41 +105,92 @@ DualDesk/
 
 ---
 
-## 🚦 Quick Start
+## 🛠️ Setup & Connecting Two PCs
+
+DualDesk connects two Windows PCs over your local Wi-Fi or Ethernet LAN without any external cloud server or internet requirement.
 
 ### 1. Prerequisites
-- **OS:** Windows 11 or Windows 10 (version 1809+)
-- **Python:** 3.12 or 3.13 (64-bit recommended)
+- **Operating System**: Windows 11 or Windows 10 (version 1809+) on both PCs
+- **Network**: Both laptops connected to the **same Wi-Fi or Ethernet network** (avoid guest Wi-Fi with client isolation)
+- **Python**: 3.12 or 3.13 (64-bit)
 - **Git**
 
-### 2. Environment Setup
+---
 
-Clone the repository and initialize the Python virtual environment:
+### 2. Primary PC Setup (Host)
 
-```powershell
-# 1. Create a virtual environment
-python -m venv .venv
+The Primary PC acts as the **Host**—generating the extended desktop screen and accepting remote mouse/keyboard inputs.
 
-# 2. Activate the virtual environment
-.\.venv\Scripts\Activate.ps1
+1. **Clone & Install Dependencies**:
+   ```powershell
+   git clone <repository-url> "C:\Projects\Twin Desk"
+   cd "C:\Projects\Twin Desk"
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   python -m pip install --upgrade pip
+   pip install -e .
+   ```
 
-# 3. Upgrade pip and install editable package with dev dependencies
-python -m pip install --upgrade pip
-pip install -e ".[dev]"
-```
+2. **Configure Windows Firewall** (One-Time Setup):
+   Open PowerShell as **Administrator** and run the automated rule configurator:
+   ```powershell
+   .\scripts\configure_firewall.ps1
+   ```
+   *(Allows UDP 53891 for peer discovery, TCP 53892 for control/input, and TCP 53893 for the video stream)*.
 
-### 3. Launch the Application
+3. **Launch Host Mode**:
+   Double-click [`run_host.bat`](run_host.bat) or run:
+   ```powershell
+   .\.venv\Scripts\python.exe -m dualdesk --role host
+   ```
+   The application will start with the role set to **Host**. Take note of the **Local IP** displayed on the Dashboard card (e.g., `192.168.31.248`).
 
-```powershell
-python -m dualdesk
-```
+---
 
-*Or launch directly via the virtual environment interpreter:*
-```powershell
-.\.venv\Scripts\python.exe -m dualdesk
-```
+### 3. Second Laptop Setup (Client / Receiver)
 
-### 4. Run the Automated Test Suite
+The second laptop acts as the **Client**—displaying the extended workspace and capturing remote input.
+
+1. **Install on Second Laptop**:
+   Copy or clone the project folder to the second laptop and install dependencies:
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -e .
+   ```
+   *(Alternatively, run `.\packaging\build_package.ps1 -Standalone` on your main PC to generate a standalone `DualDesk.exe` that requires no Python installation)*.
+
+2. **Launch Client Mode**:
+   Double-click [`run_client.bat`](run_client.bat) or run:
+   ```powershell
+   .\.venv\Scripts\python.exe -m dualdesk --role client
+   ```
+
+3. **Discover & Pair**:
+   - Go to the **Devices** tab.
+   - Click **Scan LAN** to automatically discover your Primary PC *(or type the Primary PC's IP address directly into the Manual Connect box)*.
+   - Click **Pair** next to the Host.
+   - A time-limited 6-digit confirmation code will appear on the Primary PC. Confirm the code on the second laptop to complete cryptographic TLS 1.3 pairing.
+
+4. **Start Streaming**:
+   - Click **Start Session** on the Dashboard.
+   - The stream window will open. Click the **Fullscreen** button or press <kbd>F11</kbd> to expand into a borderless extended monitor.
+
+---
+
+### 4. Key In-Session Controls
+
+| Action | Hotkey / Gesture | Description |
+| :--- | :--- | :--- |
+| **Emergency Escape** | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>Esc</kbd> | Immediately revokes remote input authority, releases all held keys/buttons, and returns control to the local host. |
+| **Toggle Fullscreen** | <kbd>F11</kbd> | Switches between windowed and borderless fullscreen viewing. |
+| **Drag & Drop File Transfer** | Drag file onto viewport | Securely transfers files up to 250MB over TLS 1.3 with SHA-256 verification. |
+| **Trackpad Pan & Zoom** | Two-finger scroll / pinch | Client multitouch gestures map to Windows wheel scroll and zoom. |
+| **Display Arrangement** | Display tab on Host | Drag the virtual monitor box to position the laptop (Left, Right, Above, Below) matching physical placement. |
+
+---
+
+### 5. Run the Automated Test Suite
 
 DualDesk includes a comprehensive test suite covering protocol validation, SQLite migrations, cryptographic pairing challenges, input clamping, network discovery, and UI initialization:
 
@@ -183,28 +234,6 @@ devcon.exe install IddDriver.inf Root\DualDeskDisplay
 - **Emergency Escape Shortcut:** Pressing **<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>Escape</kbd>** immediately revokes remote control authority and returns all pointer and keyboard control to the local host.
 - **Release-All Guarantee:** If a client abruptly disconnects or experiences network packet loss, the host immediately synthesizes release events for all currently depressed keys and mouse buttons.
 - **Unpaired Peer Rejection:** Unpaired or revoked peers attempting to initiate transport sessions are rejected and flagged in the diagnostic event log.
-
----
-
-## 📚 Documentation
-
-Detailed technical documentation and architecture decisions are available in the [`docs/`](file:///e:/New%20Projects/Twin%20Desk/docs) directory:
-
-- [Product Requirements Document (PRD)](docs/prd.md)
-- [System Architecture](docs/architecture.md)
-- [Design & Information Architecture](docs/design.md)
-- [API & Protocol Specification](docs/api.md)
-- [Authentication & Security Model](docs/authentication-security.md)
-- [Database Schema & Local State](docs/database.md)
-- [Implementation Plan & Milestones](docs/project-implementation.md)
-- [Current Implementation Status](docs/implementation-status.md)
-- [Master Roadmap: Recommended Tasks](docs/recommended-tasks.md)
-- [Multi-Device Setup & LAN Connection Guide](docs/multi-device-setup.md)
-- [Native Driver Build & Installation Guide](docs/driver-installation.md)
-- [Testing & QA Strategy](docs/testing-qa.md)
-- [Debugging & Diagnostics Guide](docs/debugging.md)
-- [Development Setup](docs/setup.md)
-- [File Index](docs/file-index.md)
 
 ---
 

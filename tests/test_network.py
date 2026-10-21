@@ -208,3 +208,15 @@ def test_tcp_control_channel_pairing_and_session():
             host_db.close()
             client_db.close()
 
+
+def test_get_local_ip():
+    from dualdesk.network.discovery import get_local_ip
+
+    ip = get_local_ip()
+    assert isinstance(ip, str)
+    assert len(ip.split(".")) == 4
+    # Ensure it is a valid IPv4 string
+    octets = [int(x) for x in ip.split(".")]
+    assert all(0 <= octet <= 255 for octet in octets)
+
+

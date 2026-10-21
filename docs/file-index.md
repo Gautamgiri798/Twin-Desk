@@ -5,6 +5,8 @@
 - `AGENTS.md`
 - `README.md`
 - `pyproject.toml`
+- [`run_client.bat`](file:///e:/New%20Projects/Twin%20Desk/run_client.bat)
+- [`run_host.bat`](file:///e:/New%20Projects/Twin%20Desk/run_host.bat)
 - `docs/agents.md`
 - `docs/api.md`
 - `docs/architecture.md`
