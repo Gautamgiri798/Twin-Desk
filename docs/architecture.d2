@@ -1,0 +1,145 @@
+# Twin Desk System Architecture Diagram
+# Language: D2 (https://d2lang.com)
+
+direction: right
+
+classes: {
+  container: {
+    style: {
+      fill: "#0B0F19"
+      stroke-width: 2
+      font-color: "#F8FAFC"
+      bold: true
+      shadow: true
+      border-radius: 8
+    }
+  }
+  module: {
+    style: {
+      fill: "#1E293B"
+      stroke-width: 1
+      font-color: "#F1F5F9"
+      border-radius: 6
+    }
+  }
+  network_channel: {
+    style: {
+      fill: "#0F172A"
+      stroke-width: 1
+      font-color: "#38BDF8"
+      border-radius: 6
+    }
+  }
+}
+
+host: "🖥️ PRIMARY PC (Host / Transmitter)" {
+  class: container
+  style.stroke: "#0284C7"
+
+  dwm: "Windows Desktop Manager\n(DWM / Display Settings)" {
+    class: module
+    style.stroke: "#38BDF8"
+  }
+  idd: "Native Windows IddCx Driver\n(Synthetic EDID 1.4 Virtual Monitor)" {
+    class: module
+    style.stroke: "#818CF8"
+  }
+  capture: "DXGI / GDI Capture Pipeline\n(IDXGIOutputDuplication Staging Texture)" {
+    class: module
+    style.stroke: "#34D399"
+  }
+  encoder: "Hardware Video Encoder\n(NVENC / QuickSync / AMF / MFT)" {
+    class: module
+    style.stroke: "#F59E0B"
+  }
+  transport_srv: "TLS 1.3 Transport Server\n(Ports 53892 & 53893 • AES-256-GCM)" {
+    class: module
+    style.stroke: "#06B6D4"
+  }
+  injector: "Win32 Input Injector & Filter\n(Coordinate Clamping • Multitouch Zoom)" {
+    class: module
+    style.stroke: "#EC4899"
+  }
+  db: "SQLite Trust Store (DualDeskDB)\n(Identities • SHA-256 Fingerprints)" {
+    class: module
+    style.stroke: "#64748B"
+  }
+
+  dwm -> idd: "Exposes Display Target"
+  idd -> capture: "Frame Buffers"
+  capture -> encoder: "Raw Video Buffers"
+  encoder -> transport_srv: "H.264 / JPEG Stream"
+  transport_srv -> injector: "Authenticated Events"
+  injector -> dwm: "Inject Pointer & Keys" {
+    style.stroke-dash: 3
+  }
+}
+
+lan: "🔒 Encrypted Local Network (LAN)" {
+  class: container
+  style.stroke: "#10B981"
+
+  ctrl_chan: "TLS 1.3 Control Channel (TCP 53892)\nPairing • Input Forwarding • File Transfer" {
+    class: network_channel
+    style.stroke: "#38BDF8"
+  }
+  stream_chan: "TLS 1.3 Media Channel (TCP 53893)\n60 FPS Length-Prefixed Video Frames" {
+    class: network_channel
+    style.stroke: "#F59E0B"
+  }
+  discovery_chan: "UDP Discovery Beacon (UDP 53891)\nLAN Peer Presence Broadcast" {
+    class: network_channel
+    style.stroke: "#A855F7"
+  }
+  audio_chan: "Audio Channel (TLS 1.3)\n16-bit 48kHz Stereo PCM" {
+    class: network_channel
+    style.stroke: "#EC4899"
+  }
+}
+
+client: "💻 SECOND LAPTOP (Client / Receiver)" {
+  class: container
+  style.stroke: "#A855F7"
+
+  client_engine: "TLS 1.3 Client Engine\n(Mutual Handshake & SHA-256 Pinning)" {
+    class: module
+    style.stroke: "#06B6D4"
+  }
+  decoder: "Video Decoder Engine\n(Hardware H.264 NAL / JPEG Parser)" {
+    class: module
+    style.stroke: "#F59E0B"
+  }
+  viewport: "PySide6 Render Viewport\n(StreamViewerWidget • Fullscreen F11)" {
+    class: module
+    style.stroke: "#38BDF8"
+  }
+  input_cap: "Input & Gesture Capture\n(Mouse, Keys, Touch Panning & Pinch)" {
+    class: module
+    style.stroke: "#EC4899"
+  }
+  escape: "Emergency Escape Monitor\n(Ctrl+Alt+Shift+Esc Hook)" {
+    class: module
+    style.stroke: "#EF4444"
+  }
+  audio_player: "Audio Playback Adapter\n(Jitter Buffer & Volume Curve)" {
+    class: module
+    style.stroke: "#34D399"
+  }
+
+  client_engine -> decoder: "Video Packets"
+  decoder -> viewport: "Render Surface"
+  viewport -> input_cap: "Collect Events"
+  input_cap -> escape: "Verify Escape Combo"
+  escape -> client_engine: "Transmit Filtered Inputs"
+  client_engine -> audio_player: "PCM Audio Chunks"
+}
+
+# Cross-network wiring
+host.transport_srv -> lan.stream_chan: "Transmit Video"
+lan.stream_chan -> client.client_engine: "Receive Video"
+
+client.client_engine <-> lan.ctrl_chan: "Control & Input"
+lan.ctrl_chan <-> host.transport_srv: "Control & Input"
+
+host.transport_srv <-> lan.discovery_chan: "Beacon Announce"
+client.client_engine <-> lan.discovery_chan: "Beacon Listen"

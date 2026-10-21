@@ -2,13 +2,14 @@
 
 - `.env.example`
 - `.gitignore`
-- `AGENTS.md`
 - `README.md`
 - `pyproject.toml`
 - [`run_client.bat`](file:///e:/New%20Projects/Twin%20Desk/run_client.bat)
 - [`run_host.bat`](file:///e:/New%20Projects/Twin%20Desk/run_host.bat)
 - `docs/agents.md`
 - `docs/api.md`
+- [docs/architecture.d2](file:///e:/New%20Projects/Twin%20Desk/docs/architecture.d2)
+- [docs/architecture.drawio](file:///e:/New%20Projects/Twin%20Desk/docs/architecture.drawio)
 - `docs/architecture.md`
 - `docs/authentication-security.md`
 - `docs/database.md`
@@ -23,6 +24,7 @@
 - [docs/multi-device-setup.md](file:///e:/New%20Projects/Twin%20Desk/docs/multi-device-setup.md)
 - [docs/prd.md](file:///e:/New%20Projects/Twin%20Desk/docs/prd.md)
 - [docs/project-implementation.md](file:///e:/New%20Projects/Twin%20Desk/docs/project-implementation.md)
+- [docs/quickstart.d2](file:///e:/New%20Projects/Twin%20Desk/docs/quickstart.d2)
 - [docs/recommended-tasks.md](file:///e:/New%20Projects/Twin%20Desk/docs/recommended-tasks.md)
 - [docs/setup.md](file:///e:/New%20Projects/Twin%20Desk/docs/setup.md)
 - [docs/testing-qa.md](file:///e:/New%20Projects/Twin%20Desk/docs/testing-qa.md)

@@ -1,0 +1,22 @@
+# Twin Desk 3-Step Quickstart Sequence
+# Language: D2 (https://d2lang.com)
+
+shape: sequence_diagram
+
+user: "User"
+host: "Primary PC (Host)"
+network: "Local Wi-Fi / LAN"
+client: "Second Laptop (Client)"
+
+user -> host: "1. Launch run_host.bat"
+host -> host: "Start TLS 1.3 server (Port 53892/53893) & show IP"
+user -> client: "2. Launch run_client.bat"
+client -> network: "Broadcast UDP Discovery (Port 53891)"
+network -> host: "Forward Discovery Probe"
+host -> client: "Announce presence with public key fingerprint"
+client -> host: "Request Cryptographic Pairing"
+host -> user: "Display 6-digit confirmation code"
+user -> client: "3. Confirm 6-digit confirmation code"
+client -> host: "TLS 1.3 Mutual Authentication (AES-256-GCM)"
+host -> client: "Stream 60 FPS Video (DXGI / NVENC)"
+client -> user: "Borderless Fullscreen Extended Desktop (Press F11)"

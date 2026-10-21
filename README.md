@@ -38,26 +38,29 @@
 
 Once installed on both machines, connecting whenever you want to work takes less than 10 seconds:
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as User
-    participant Host as Primary PC (Host)
-    participant LAN as Local Wi-Fi / LAN
-    participant Client as Second Laptop (Client)
+```d2
+shape: sequence_diagram
 
-    User->>Host: 1. Launch run_host.bat
-    Host-->>Host: Starts TLS 1.3 server & displays IP
-    User->>Client: 2. Launch run_client.bat
-    Client->>LAN: Broadcasts UDP Discovery (Port 53891)
-    Host-->>Client: Discovery Response with Fingerprint
-    Client->>Host: Pairing Request
-    Host-->>User: Displays 6-digit confirmation code
-    User->>Client: 3. Confirm 6-digit code
-    Client->>Host: TLS 1.3 Mutual Authentication
-    Host-->>Client: 60 FPS Video Stream (Port 53893)
-    Client-->>User: Fullscreen Extended Display (Press F11)
+user: "User"
+host: "Primary PC (Host)"
+network: "Local Wi-Fi / LAN"
+client: "Second Laptop (Client)"
+
+user -> host: "1. Launch run_host.bat"
+host -> host: "Start TLS 1.3 server (Port 53892/53893) & show IP"
+user -> client: "2. Launch run_client.bat"
+client -> network: "Broadcast UDP Discovery (Port 53891)"
+network -> host: "Forward Discovery Probe"
+host -> client: "Announce presence with public key fingerprint"
+client -> host: "Request Cryptographic Pairing"
+host -> user: "Display 6-digit confirmation code"
+user -> client: "3. Confirm 6-digit confirmation code"
+client -> host: "TLS 1.3 Mutual Authentication (AES-256-GCM)"
+host -> client: "Stream 60 FPS Video (DXGI / NVENC)"
+client -> user: "Borderless Fullscreen Extended Desktop (Press F11)"
 ```
+
+*Declarative D2 specification: [`docs/quickstart.d2`](docs/quickstart.d2)*
 
 1. **On your Primary PC (Host)**:
    - Double-click [`run_host.bat`](run_host.bat).
@@ -102,47 +105,54 @@ sequenceDiagram
 
 ## 🏗️ Architecture
 
-```mermaid
-graph LR
-    subgraph Host["🖥️ PRIMARY PC (Host)"]
-        OS["Windows Desktop Manager<br/>(DWM / Display Settings)"]
-        IDD["Native IddCx Driver<br/>(Virtual Display)"]
-        DXGI["DXGI / GDI Capture<br/>(IDXGIOutputDuplication)"]
-        ENC["Hardware Video Encoder<br/>(NVENC / QSV / AMF)"]
-        INJ["Input Injector & Sanitizer<br/>(Win32 SetCursorPos / Touch)"]
-        H_NET["TLS 1.3 Transport Server<br/>(Ports 53892 & 53893)"]
+> [!TIP]
+> **Polished Interactive Diagrams**:
+> - 🎨 **draw.io / diagrams.net**: [`docs/architecture.drawio`](docs/architecture.drawio) — Open in [draw.io / diagrams.net](https://app.diagrams.net) or the VS Code Draw.io extension for full interactive inspection and vector editing.
+> - 📄 **D2 Declarative Source**: [`docs/architecture.d2`](docs/architecture.d2) & [`docs/quickstart.d2`](docs/quickstart.d2) — Declarative architecture and sequence specifications.
 
-        OS --> IDD
-        IDD --> DXGI
-        DXGI --> ENC
-        ENC --> H_NET
-        H_NET --> INJ
-        INJ --> OS
-    end
+```d2
+direction: right
 
-    subgraph Network["🔒 Encrypted Local Network (LAN)"]
-        CTRL["TLS 1.3 Control Channel (TCP 53892)<br/>Input, Pairing, File Transfer"]
-        STREAM["TLS 1.3 Video Stream (TCP 53893)<br/>H.264 / JPEG Length-Prefixed Frames"]
-        BEACON["UDP Beacon (Port 53891)<br/>Peer Presence Discovery"]
-    end
+host: "🖥️ PRIMARY PC (Host / Transmitter)" {
+  style.fill: "#0B0F19"
+  style.stroke: "#0284C7"
 
-    subgraph Client["💻 SECOND LAPTOP (Client / Receiver)"]
-        C_NET["TLS 1.3 Client Engine"]
-        DEC["Video Decoder<br/>(H.264 NAL / JPEG)"]
-        VIEW["PySide6 Render Viewport<br/>(StreamViewerWidget / Fullscreen)"]
-        IN_CAP["Input & Gesture Capture<br/>(Mouse, Keys, Touch Panning)"]
-        ESC["Emergency Escape Monitor<br/>(Ctrl+Alt+Shift+Esc)"]
+  dwm: "Windows Desktop Manager\n(DWM / Display Settings)"
+  idd: "Native Windows IddCx Driver\n(Synthetic EDID 1.4 Virtual Monitor)"
+  capture: "DXGI / GDI Capture Pipeline\n(IDXGIOutputDuplication)"
+  encoder: "Hardware Video Encoder\n(NVENC / QuickSync / AMF / MFT)"
+  transport_srv: "TLS 1.3 Transport Server\n(Ports 53892 & 53893)"
+  injector: "Win32 Input Injector & Filter\n(Coordinate Clamping & Touch)"
 
-        C_NET --> DEC
-        DEC --> VIEW
-        VIEW --> IN_CAP
-        IN_CAP --> ESC
-        ESC --> C_NET
-    end
+  dwm -> idd -> capture -> encoder -> transport_srv
+  transport_srv -> injector -> dwm
+}
 
-    H_NET <--> CTRL <--> C_NET
-    H_NET --> STREAM --> C_NET
-    H_NET <.- BEACON .-> C_NET
+lan: "🔒 Encrypted Local Network (LAN)" {
+  style.fill: "#0F172A"
+  style.stroke: "#10B981"
+
+  ctrl: "TLS 1.3 Control Channel (TCP 53892)\nPairing • Input • File Transfer"
+  stream: "TLS 1.3 Media Channel (TCP 53893)\n60 FPS H.264 / JPEG Stream"
+  beacon: "UDP Discovery Beacon (UDP 53891)\nPeer Presence Broadcast"
+}
+
+client: "💻 SECOND LAPTOP (Client / Receiver)" {
+  style.fill: "#0B0F19"
+  style.stroke: "#A855F7"
+
+  client_engine: "TLS 1.3 Client Engine"
+  decoder: "Video Decoder Engine\n(H.264 NAL / JPEG)"
+  viewport: "PySide6 Render Viewport\n(StreamViewerWidget / Fullscreen)"
+  input_cap: "Input & Gesture Capture\n(Mouse, Keys, Touch Panning)"
+  escape: "Emergency Escape Hook\n(Ctrl+Alt+Shift+Esc)"
+
+  client_engine -> decoder -> viewport -> input_cap -> escape -> client_engine
+}
+
+host.transport_srv -> lan.stream -> client.client_engine: "Video Frames"
+client.client_engine <-> lan.ctrl <-> host.transport_srv: "Input & Control"
+client.client_engine <-> lan.beacon <-> host.transport_srv: "Discovery"
 ```
 
 ---
@@ -179,6 +189,10 @@ Twin-Desk/
 │   ├── security/                   # SHA-256 identity, 6-digit challenge pairing & input filters
 │   ├── storage/                    # SQLite repository, schema migrations & settings
 │   └── ui/                         # PySide6 desktop dashboard, themes, and stream viewer
+├── docs/                           # Architecture specifications & diagrams
+│   ├── architecture.drawio         # Polished interactive diagram (draw.io / diagrams.net)
+│   ├── architecture.d2             # Declarative system architecture model (D2)
+│   └── quickstart.d2               # Declarative connection sequence model (D2)
 ├── tests/                          # Automated unit & integration test suite (136 tests)
 └── pyproject.toml                  # Python project metadata and dependencies
 ```
