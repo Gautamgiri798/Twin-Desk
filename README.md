@@ -6,7 +6,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%2010-0078D6?style=flat-square&logo=windows&logoColor=white)](https://microsoft.com)
 [![Framework](https://img.shields.io/badge/GUI-PySide6%20Qt6-41CD52?style=flat-square&logo=qt&logoColor=white)](https://doc.qt.io/qtforpython/)
 [![Driver Architecture](https://img.shields.io/badge/Driver-Windows%20IddCx%20(UMDF%202)-blueviolet?style=flat-square)](native/idd_driver)
-[![Tests](https://img.shields.io/badge/Tests-23%20passed-success?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-135%20passed-success?style=flat-square&logo=pytest&logoColor=white)](tests/)
 
 **Two PCs. One extended workspace. High-performance, local-network virtual display utility.**
 
@@ -52,13 +52,22 @@ Unlike standard remote desktop or screen mirroring tools that simply duplicate e
 
 | Component | Capabilities |
 | :--- | :--- |
-| **Desktop Dashboard** | Modern dark-themed PySide6 interface with live telemetry strip (FPS, latency, bitrate, frame drops), role selector (Host/Client), and connection controls. |
-| **LAN Peer Discovery** | Automated local network UDP discovery beacon (port `53891`) with device presence detection and manual IP address fallback. |
-| **Cryptographic Pairing** | Identity-bound pairing using SHA-256 public key fingerprints, time-limited 6-digit confirmation codes (60s expiry), rate-limiting (max 3 attempts), and peer revocation. |
-| **Secure Input Routing** | Remote mouse and keyboard injection with coordinate clamping to virtual monitor boundaries, replay rejection, mandatory `release_all` on disconnect, and emergency escape shortcut. |
-| **Driver Detection** | Direct Win32 `EnumDisplayDevicesW` inspection reporting real-time virtual display driver status and supported resolution modes (1080p, 1440p, 720p, 4K). |
-| **Redacted Diagnostics** | One-click diagnostic bundle exporter producing clean, anonymized JSON system reports with IP addresses and tokens stripped. |
-| **Native C++ Scaffold** | Ready-to-compile Windows IddCx driver source code, INF installation manifest, and DXGI desktop duplication capture pipeline in `native/`. |
+| **Desktop Dashboard & Telemetry** | Modern dark-themed PySide6 interface with live telemetry strip (`LiveMetricStrip`), real-time 60s rolling performance sparkline graphs (FPS, latency spikes, throughput, drops), and role selection (Host/Client). |
+| **LAN Peer Discovery & Firewall** | Automated local network UDP beacon (port `53891`), manual IP fallback, and automated Windows Defender Firewall diagnostics (`scripts/configure_firewall.ps1`). |
+| **Cryptographic Pairing & TLS 1.3** | Identity-bound pairing using SHA-256 public key fingerprints, time-limited 6-digit confirmation codes (60s expiry), brute-force rate limiting (max 3 attempts), and full TLS 1.3 AES-256-GCM transport encryption. |
+| **Secure Input Routing & Lockout** | Remote mouse and keyboard injection with virtual monitor coordinate clamping, replay rejection, mandatory `release_all` on disconnect, customizable emergency escape shortcuts, and optional host physical input lockout. |
+| **Touch & Multitouch Gestures** | Full Windows touch contact tracking, two-finger pan/scroll, tap/double-tap, two-finger right-click, and pinch-to-zoom mapping. |
+| **Zero-Overhead GPU Capture** | Direct DirectX 11 / DXGI Desktop Duplication (`IDXGIOutputDuplication`) capture pipeline with automatic graceful fallback to Win32 GDI in headless environments. |
+| **Hardware Video Acceleration** | GPU hardware encoder detection (NVIDIA NVENC, Intel QuickSync, AMD AMF, Windows Media Foundation) with H.264 Annex B bitstream generation and real-time performance diagnostics card. |
+| **Adaptive Rate Control** | Dynamic JPEG quality and framerate throttling (15–60 FPS) responding to socket backpressure with visual congestion indicators (`Nominal`, `Recovering`, `Congested`, `Backpressure`). |
+| **Multi-Monitor Arrangement Map** | Interactive spatial arrangement canvas on Display Settings allowing drag-and-drop virtual display positioning (Left, Right, Above, Below) with real-time coordinate synchronization. |
+| **Encrypted Clipboard Sync** | Bidirectional text clipboard exchange with size limits (1MB), flood rate-limiting (5 updates/sec), null-byte stripping, and anti-echo loop suppression. |
+| **Secure Out-of-Band File Transfer** | Drag-and-drop encrypted file transfer over authenticated TLS control channel with directory traversal sanitization, 250MB guard limit, and per-chunk/file SHA-256 verification. |
+| **Audio Forwarding & Health Gauge** | 16-bit 48kHz stereo PCM streaming with volume scaling (0–150%), silence suppression, and jitter buffer health gauge displaying buffered latency and underrun tallies. |
+| **System Tray & Autostart** | Notification area integration (`QSystemTrayIcon`) with live status badges, close-to-tray window minimization, and Windows Registry autostart toggle. |
+| **Driver Detection & Setup Wizard** | Win32 `EnumDisplayDevicesW` inspection and interactive Driver Installation UI Wizard with elevation/test-signing checks and non-destructive dry-run validation. |
+| **Automated Recovery** | Non-blocking exponential backoff reconnection worker (`ConnectionState.RECOVERING`) with interactive recovery overlay banner and token preservation. |
+| **Windows Packaging & CI** | Standalone Inno Setup installer specification (`DualDesk_Setup_v0.1.0.exe`), automated build script, and comprehensive GitHub Actions CI pipeline. |
 
 ---
 
@@ -188,6 +197,10 @@ Detailed technical documentation and architecture decisions are available in the
 - [Authentication & Security Model](docs/authentication-security.md)
 - [Database Schema & Local State](docs/database.md)
 - [Implementation Plan & Milestones](docs/project-implementation.md)
+- [Current Implementation Status](docs/implementation-status.md)
+- [Master Roadmap: Recommended Tasks](docs/recommended-tasks.md)
+- [Multi-Device Setup & LAN Connection Guide](docs/multi-device-setup.md)
+- [Native Driver Build & Installation Guide](docs/driver-installation.md)
 - [Testing & QA Strategy](docs/testing-qa.md)
 - [Debugging & Diagnostics Guide](docs/debugging.md)
 - [Development Setup](docs/setup.md)

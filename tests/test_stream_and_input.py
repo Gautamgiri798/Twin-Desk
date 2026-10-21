@@ -170,3 +170,26 @@ def test_stream_viewer_widget(qapp):
             window.update_frame(frame_bytes)
         window.close()
         db.close()
+
+
+def test_input_filter_custom_escape_shortcuts_and_lockout() -> None:
+    from dualdesk.protocol.models import KeyPayload
+    from dualdesk.security.input_filter import AVAILABLE_ESCAPE_SHORTCUTS, InputFilter
+
+    assert len(AVAILABLE_ESCAPE_SHORTCUTS) >= 5
+
+    # Test F12+Escape combination
+    filt = InputFilter(session_id="test", escape_shortcut="F12+Escape", host_input_lockout=True)
+    assert filt.escape_shortcut == "F12+Escape"
+    assert filt.host_input_lockout is True
+
+    # Press F12 (VK 123)
+    filt.process_key(KeyPayload(key_code=123, key_name="F12", pressed=True), sequence=1)
+    assert not filt.emergency_escape_triggered
+
+    # Press Escape (VK 27) -> triggers emergency escape
+    filt.process_key(KeyPayload(key_code=27, key_name="Escape", pressed=True), sequence=2)
+    assert filt.emergency_escape_triggered is True
+    # Host input lockout immediately cleared and inputs released
+    assert filt.host_input_lockout is False
+    assert not filt.has_held_inputs

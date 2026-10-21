@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
@@ -12,10 +14,93 @@ from PySide6.QtGui import (
     QResizeEvent,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from dualdesk.display.decoder import VideoDecoderAdapter
 from dualdesk.network.transport import ConnectionManager, ConnectionState
+
+
+class ReconnectionOverlay(QFrame):
+    """
+    Non-blocking recovery overlay displayed over the stream viewport
+    when an unexpected network disconnect triggers auto-reconnect backoff.
+    """
+
+    def __init__(
+        self,
+        connection_manager: ConnectionManager,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.connection_manager = connection_manager
+        self.setStyleSheet(
+            "QFrame {"
+            "  background: rgba(15, 23, 42, 0.94);"
+            "  border: 1px solid #f59e0b;"
+            "  border-radius: 8px;"
+            "  padding: 8px 16px;"
+            "}"
+        )
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(12)
+
+        icon_label = QLabel("⚠️")
+        icon_label.setStyleSheet("font-size: 18px;")
+        layout.addWidget(icon_label)
+
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(2)
+        self.title_label = QLabel("Connection Interrupted")
+        self.title_label.setStyleSheet("color: #f59e0b; font-size: 12px; font-weight: 700;")
+        self.msg_label = QLabel("Attempting automatic reconnection...")
+        self.msg_label.setStyleSheet("color: #cbd5e1; font-size: 11px;")
+        text_layout.addWidget(self.title_label)
+        text_layout.addWidget(self.msg_label)
+        layout.addLayout(text_layout)
+
+        layout.addStretch(1)
+
+        self.btn_cancel = QPushButton("Cancel Reconnect")
+        self.btn_cancel.setStyleSheet(
+            "QPushButton {"
+            "  background: #dc2626;"
+            "  color: white;"
+            "  font-weight: 600;"
+            "  font-size: 11px;"
+            "  border-radius: 4px;"
+            "  padding: 5px 10px;"
+            "}"
+            "QPushButton:hover { background: #b91c1c; }"
+        )
+        self.btn_cancel.clicked.connect(self._on_cancel_clicked)
+        layout.addWidget(self.btn_cancel)
+
+        self.hide()
+
+    def _on_cancel_clicked(self) -> None:
+        self.connection_manager.cancel_reconnect()
+        self.hide()
+
+    def show_reconnecting(self, attempt: int, max_attempts: int, detail: str = "") -> None:
+        if detail and f"{attempt}/{max_attempts}" not in detail:
+            text = f"{detail} (Attempt {attempt}/{max_attempts})"
+        else:
+            text = detail or f"Attempting automatic reconnection (Attempt {attempt}/{max_attempts})..."
+        self.msg_label.setText(text)
+        self.show()
+        self.raise_()
+
+    def hide_overlay(self) -> None:
+        self.hide()
 
 
 class StreamViewerWidget(QWidget):
@@ -37,6 +122,7 @@ class StreamViewerWidget(QWidget):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setStyleSheet("background-color: #0b0f19;")
+        self.setAcceptDrops(True)
 
         self._pixmap: QPixmap | None = None
         self._render_rect: QRectF | None = None
@@ -47,6 +133,23 @@ class StreamViewerWidget(QWidget):
         self._resize_timer.setSingleShot(True)
         self._resize_timer.setInterval(300)
         self._resize_timer.timeout.connect(self._on_debounced_resize)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                local_file = url.toLocalFile()
+                if local_file and Path(local_file).is_file():
+                    self.connection_manager.send_file(Path(local_file))
+                    event.acceptProposedAction()
+                    break
+        else:
+            super().dropEvent(event)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -214,7 +317,38 @@ class StreamWindow(QMainWindow):
         self.viewer = StreamViewerWidget(connection_manager, self)
         layout.addWidget(self.viewer, 1)
 
+        self.reconnect_overlay = ReconnectionOverlay(connection_manager, self.viewer)
+
         self.setCentralWidget(container)
+
+        self._prev_state_handler = self.connection_manager.on_state_changed
+        self.connection_manager.on_state_changed = self._on_conn_state_changed
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "reconnect_overlay") and hasattr(self, "viewer"):
+            overlay_w = min(520, max(300, self.viewer.width() - 40))
+            overlay_h = 56
+            ox = (self.viewer.width() - overlay_w) // 2
+            oy = 16
+            self.reconnect_overlay.setGeometry(ox, oy, overlay_w, overlay_h)
+
+    def _on_conn_state_changed(self, state: ConnectionState, detail: str) -> None:
+        if self._prev_state_handler:
+            try:
+                self._prev_state_handler(state, detail)
+            except (RuntimeError, TypeError):
+                pass  # Ignore handler shutdown or invocation glitches
+
+        if state == ConnectionState.RECOVERING:
+            self.reconnect_overlay.show_reconnecting(
+                attempt=self.connection_manager.reconnect_attempt,
+                max_attempts=self.connection_manager.max_reconnect_attempts,
+                detail=detail,
+            )
+            self.resizeEvent(QResizeEvent(self.size(), self.size()))
+        else:
+            self.reconnect_overlay.hide_overlay()
 
     def update_frame(self, frame_bytes: bytes) -> None:
         self.viewer.update_frame(frame_bytes)

@@ -84,7 +84,7 @@ def test_clipboard_guard_sanitization_and_bounds() -> None:
 
 
 def test_clipboard_adapter_echo_suppression() -> None:
-    adapter = ClipboardAdapter()
+    adapter = ClipboardAdapter(in_memory_only=True)
 
     # 1. Setting remote text records received hash
     adapter.set_text("Remote incoming text")

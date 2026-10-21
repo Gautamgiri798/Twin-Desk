@@ -163,3 +163,131 @@ def check_virtual_display_driver() -> DisplayDriverStatus:
             detected_monitors=detected_monitors,
             supported_modes=supported_modes,
         )
+
+
+@dataclass
+class DriverPrerequisites:
+    is_admin: bool
+    is_testsigning_enabled: bool
+    has_windows_sdk: bool
+    has_vs: bool
+    has_wdk: bool
+    status_summary: str
+    can_dry_run: bool
+
+
+def check_driver_prerequisites() -> DriverPrerequisites:
+    """Evaluates host system readiness for building and test-signing the IDD driver."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    is_admin = False
+    is_testsigning = False
+
+    if platform.system() == "Windows":
+        try:
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except (AttributeError, OSError):
+            is_admin = False
+
+        try:
+            proc = subprocess.run(
+                ["bcdedit"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            is_testsigning = (
+                "testsigning             Yes" in proc.stdout
+                or "testsigning             yes" in proc.stdout.lower()
+            )
+        except (OSError, subprocess.SubprocessError):
+            is_testsigning = False
+
+    sdk_root = (
+        Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"))
+        / "Windows Kits"
+        / "10"
+    )
+    has_sdk = sdk_root.exists()
+
+    vs_where = (
+        Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"))
+        / "Microsoft Visual Studio"
+        / "Installer"
+        / "vswhere.exe"
+    )
+    has_vs = vs_where.exists()
+
+    has_wdk = False
+    if has_sdk:
+        include_dir = sdk_root / "Include"
+        if include_dir.exists():
+            has_wdk = any(
+                "km" in str(p).lower() or "iddcx" in str(p).lower()
+                for p in include_dir.glob("*/*")
+            )
+
+    summary_parts = []
+    if not is_admin:
+        summary_parts.append(
+            "Elevated Administrator permissions are required to install drivers."
+        )
+    if not is_testsigning:
+        summary_parts.append(
+            "Windows Test-Signing must be enabled (bcdedit /set testsigning on)."
+        )
+    if not has_sdk and not has_vs:
+        summary_parts.append(
+            "Visual Studio and Windows 10/11 SDK are recommended for local compilation."
+        )
+    if not summary_parts:
+        summary_parts.append(
+            "Prerequisites satisfied. System is ready for driver validation."
+        )
+
+    return DriverPrerequisites(
+        is_admin=is_admin,
+        is_testsigning_enabled=is_testsigning,
+        has_windows_sdk=has_sdk,
+        has_vs=has_vs,
+        has_wdk=has_wdk,
+        status_summary=" ".join(summary_parts),
+        can_dry_run=True,
+    )
+
+
+def run_driver_dry_run() -> tuple[bool, str]:
+    """Safely executes scripts/build_driver.ps1 -DryRun without modifying system state."""
+    import subprocess
+    from pathlib import Path
+
+    script_path = Path(__file__).resolve().parents[3] / "scripts" / "build_driver.ps1"
+    if not script_path.exists():
+        return False, f"Driver build script not found at {script_path}"
+
+    try:
+        proc = subprocess.run(
+            [
+                "powershell.exe",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_path),
+                "-DryRun",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        combined = (proc.stdout + "\n" + proc.stderr).strip()
+        return proc.returncode == 0, combined
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"Failed to execute dry-run: {e}"
+
+

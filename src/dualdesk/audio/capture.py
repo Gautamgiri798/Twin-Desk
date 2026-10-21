@@ -107,6 +107,7 @@ class AudioCaptureAdapter:
         self.chunk_bytes = self.format.bytes_for_duration(chunk_duration_ms)
 
         self.is_capturing = False
+        self.is_muted = False
         self._sequence_counter = 0
         self._frames_captured = 0
         self._last_chunk_time = 0.0
@@ -122,19 +123,26 @@ class AudioCaptureAdapter:
     def stop_capture(self) -> None:
         self.is_capturing = False
 
-    def capture_chunk(self, synthetic_sine_freq: float | None = None) -> AudioFrame | None:
+    def set_muted(self, muted: bool) -> None:
+        self.is_muted = muted
+
+    def capture_chunk(
+        self,
+        synthetic_sine_freq: float | None = None,
+        force: bool = False,
+    ) -> AudioFrame | None:
         """
         Captures the next audio chunk.
         If synthetic_sine_freq is specified (or in testing/headless environments),
         generates an audible PCM sine wave chunk for end-to-end audio pipeline verification.
         """
-        if not self.is_capturing:
+        if not self.is_capturing or self.is_muted:
             return None
 
         now = time.time()
         interval = self.chunk_duration_ms / 1000.0
 
-        if self._last_chunk_time > 0 and (now - self._last_chunk_time) < (interval * 0.8):
+        if not force and self._last_chunk_time > 0 and (now - self._last_chunk_time) < (interval * 0.8):
             return None
 
         self._last_chunk_time = now
@@ -181,6 +189,7 @@ class AudioCaptureAdapter:
             "frames_captured": self._frames_captured,
             "current_volume": round(self._current_volume, 3),
             "is_capturing": self.is_capturing,
+            "is_muted": self.is_muted,
         }
 
 
@@ -197,6 +206,15 @@ class AudioPlayerAdapter:
         self._total_enqueued = 0
         self._total_dequeued = 0
         self._dropped_overflow = 0
+        self._underruns = 0
+        self.volume: float = 1.0
+        self.is_muted: bool = False
+
+    def set_volume(self, volume: float) -> None:
+        self.volume = max(0.0, min(1.5, volume))
+
+    def set_muted(self, muted: bool) -> None:
+        self.is_muted = muted
 
     def enqueue_frame(self, frame: AudioFrame) -> bool:
         """Enqueues an incoming audio frame for playback."""
@@ -212,9 +230,38 @@ class AudioPlayerAdapter:
         """Pulls the next audio frame from the jitter buffer."""
         with self._lock:
             if not self._queue:
+                self._underruns += 1
                 return None
             self._total_dequeued += 1
-            return self._queue.popleft()
+            frame = self._queue.popleft()
+
+            if self.is_muted or self.volume == 0.0:
+                return AudioFrame(
+                    data=b"\x00" * len(frame.data),
+                    sequence=frame.sequence,
+                    timestamp_us=frame.timestamp_us,
+                    sample_rate=frame.sample_rate,
+                    channels=frame.channels,
+                    rms_volume=0.0,
+                )
+
+            if self.volume != 1.0:
+                sample_count = len(frame.data) // 2
+                scaled_buf = bytearray(len(frame.data))
+                for i in range(sample_count):
+                    (val,) = struct.unpack_from("<h", frame.data, i * 2)
+                    scaled_val = int(max(-32768, min(32767, val * self.volume)))
+                    struct.pack_into("<h", scaled_buf, i * 2, scaled_val)
+                return AudioFrame(
+                    data=bytes(scaled_buf),
+                    sequence=frame.sequence,
+                    timestamp_us=frame.timestamp_us,
+                    sample_rate=frame.sample_rate,
+                    channels=frame.channels,
+                    rms_volume=frame.rms_volume * self.volume,
+                )
+
+            return frame
 
     @property
     def queue_size(self) -> int:
@@ -223,11 +270,23 @@ class AudioPlayerAdapter:
 
     def get_stats(self) -> dict[str, Any]:
         with self._lock:
+            queue_len = len(self._queue)
+            chunk_duration_ms = 20.0
+            drop_pct = (
+                (self._dropped_overflow / max(1, self._total_enqueued)) * 100.0
+                if self._total_enqueued > 0
+                else 0.0
+            )
             return {
-                "queue_size": len(self._queue),
+                "queue_size": queue_len,
                 "total_enqueued": self._total_enqueued,
                 "total_dequeued": self._total_dequeued,
                 "dropped_overflow": self._dropped_overflow,
+                "underruns": self._underruns,
+                "volume": round(self.volume, 2),
+                "is_muted": self.is_muted,
+                "buffer_latency_ms": round(queue_len * chunk_duration_ms, 1),
+                "drop_percentage": round(drop_pct, 1),
             }
 
     def reset(self) -> None:
@@ -236,3 +295,5 @@ class AudioPlayerAdapter:
             self._total_enqueued = 0
             self._total_dequeued = 0
             self._dropped_overflow = 0
+            self._underruns = 0
+

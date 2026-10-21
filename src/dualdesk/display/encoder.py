@@ -119,6 +119,45 @@ def detect_encoder_capabilities() -> EncoderCapabilities:
     )
 
 
+def get_backend_display_name(backend: EncoderBackend | str) -> str:
+    """Returns human-readable brand and driver library name for encoder backend."""
+    b_val = EncoderBackend(backend) if isinstance(backend, str) else backend
+    mapping = {
+        EncoderBackend.NVENC: "NVIDIA NVENC (nvEncodeAPI64)",
+        EncoderBackend.QUICKSYNC: "Intel QuickSync Video (libmfx64)",
+        EncoderBackend.AMF: "AMD Advanced Media Framework (amfrt64)",
+        EncoderBackend.MEDIA_FOUNDATION: "Windows Media Foundation (mfplat.dll)",
+        EncoderBackend.SOFTWARE: "Software Fallback (CPU Annex-B / JPEG)",
+    }
+    return mapping.get(b_val, str(backend))
+
+
+def get_encoder_diagnostic_summary(caps: EncoderCapabilities | None = None) -> dict[str, Any]:
+    """Generates structured diagnostics dictionary for UI cards and system reports."""
+    caps = caps or detect_encoder_capabilities()
+    status_badge = "HARDWARE ACCELERATED" if caps.is_hardware_accelerated else "SOFTWARE FALLBACK"
+    active_name = get_backend_display_name(caps.preferred_backend)
+    available_names = [get_backend_display_name(b) for b in caps.available_backends]
+    explanation = (
+        "Dedicated GPU hardware acceleration is active for ultra-low latency frame encoding."
+        if caps.is_hardware_accelerated
+        else "No dedicated GPU hardware encoder library was detected. Falling back to CPU baseline encoding."
+    )
+    return {
+        "preferred_backend": caps.preferred_backend.value,
+        "preferred_backend_name": active_name,
+        "is_hardware_accelerated": caps.is_hardware_accelerated,
+        "status_badge": status_badge,
+        "available_backends": [b.value for b in caps.available_backends],
+        "available_backend_names": available_names,
+        "supported_codecs": [c.value for c in caps.supported_codecs],
+        "max_resolution": f"{caps.max_resolution[0]}x{caps.max_resolution[1]}",
+        "max_fps": caps.max_fps,
+        "profile": "H.264 High Profile (Level 4.1)" if caps.is_hardware_accelerated else "H.264 Baseline / JPEG",
+        "explanation": explanation,
+    }
+
+
 ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
 
 

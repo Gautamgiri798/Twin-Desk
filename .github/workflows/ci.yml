@@ -1,0 +1,106 @@
+name: DualDesk CI & Quality Assurance
+
+on:
+  push:
+    branches: [ "main", "master", "develop" ]
+  pull_request:
+    branches: [ "main", "master", "develop" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-secret-check:
+    name: Code Lint & Secret Hygiene
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Linting Tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Run Ruff Code Quality Linter
+        run: |
+          ruff check src tests
+
+      - name: Check for Accidentally Committed Secrets or Certificates
+        shell: pwsh
+        run: |
+          $forbiddenExtensions = @("*.pfx", "*.p12", "*.key", "*.priv", "*.secret", "*.id_rsa")
+          $leakedFiles = @()
+          foreach ($ext in $forbiddenExtensions) {
+              $matches = Get-ChildItem -Path . -Recurse -Filter $ext -Exclude ".venv", ".git"
+              if ($matches) {
+                  $leakedFiles += $matches
+              }
+          }
+          if ($leakedFiles.Count -gt 0) {
+              Write-Error "Detected forbidden certificate/key file in repository: $($leakedFiles -join ', ')"
+              exit 1
+          }
+          Write-Host "Secret and certificate hygiene scan passed cleanly."
+
+  test-suite:
+    name: Headless Automated Test Suite
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Execute Full Pytest Test Suite
+        run: |
+          pytest tests/ -v
+
+  scripts-and-driver-dryrun:
+    name: PowerShell Scripts & Driver Toolchain Validation
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Validate Firewall Configuration Script (Dry-Run & Check-Only)
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/configure_firewall.ps1 -DryRun
+          powershell -ExecutionPolicy Bypass -File scripts/configure_firewall.ps1 -CheckOnly
+
+      - name: Validate IDD Driver Build Toolchain Script (Dry-Run)
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/build_driver.ps1 -DryRun
+
+      - name: Validate Windows Standalone Packaging Script (Dry-Run)
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File packaging/build_package.ps1 -DryRun
+

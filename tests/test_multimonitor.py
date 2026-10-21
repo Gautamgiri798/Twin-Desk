@@ -171,3 +171,47 @@ def test_get_dpi_for_point() -> None:
     assert dx >= 96
     assert dy >= 96
 
+
+def test_display_placement_spatial_orientations() -> None:
+    from dualdesk.display.multimonitor import (
+        DisplayGeometry,
+        DisplayPlacement,
+        VirtualDesktopLayout,
+    )
+
+    pri = DisplayGeometry(x=0, y=0, width=1920, height=1080, is_primary=True)
+    sec = DisplayGeometry(x=1920, y=0, width=1920, height=1080, is_primary=False)
+    layout = VirtualDesktopLayout(displays=[pri, sec])
+
+    # 1. Right
+    layout.set_secondary_placement(DisplayPlacement.RIGHT)
+    assert sec.x == 1920
+    assert sec.y == 0
+    assert layout.virtual_x == 0
+    assert layout.virtual_width == 3840
+    assert layout.virtual_height == 1080
+
+    # 2. Left
+    layout.set_secondary_placement(DisplayPlacement.LEFT)
+    assert sec.x == -1920
+    assert sec.y == 0
+    assert layout.virtual_x == -1920
+    assert layout.virtual_width == 3840
+    assert layout.virtual_height == 1080
+
+    # 3. Above
+    layout.set_secondary_placement(DisplayPlacement.ABOVE)
+    assert sec.x == 0
+    assert sec.y == -1080
+    assert layout.virtual_y == -1080
+    assert layout.virtual_width == 1920
+    assert layout.virtual_height == 2160
+
+    # 4. Below
+    layout.set_secondary_placement(DisplayPlacement.BELOW)
+    assert sec.x == 0
+    assert sec.y == 1080
+    assert layout.virtual_y == 0
+    assert layout.virtual_width == 1920
+    assert layout.virtual_height == 2160
+

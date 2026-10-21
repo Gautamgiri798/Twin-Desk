@@ -175,3 +175,96 @@ def test_connection_manager_audio_frame_handling() -> None:
     assert dequeued is not None
     assert dequeued.sequence == 17
     assert dequeued.data == test_frame.data
+
+
+def test_audio_mute_and_volume_controls() -> None:
+    adapter = AudioCaptureAdapter(chunk_duration_ms=10.0)
+    adapter.start_capture()
+    assert adapter.capture_chunk(synthetic_sine_freq=440.0) is not None
+
+    # Host Mute stops outgoing audio frames
+    adapter.set_muted(True)
+    assert adapter.capture_chunk(synthetic_sine_freq=440.0) is None
+
+    adapter.set_muted(False)
+    assert adapter.capture_chunk(synthetic_sine_freq=440.0, force=True) is not None
+
+    # Client volume scaling and mute
+    player = AudioPlayerAdapter(max_buffer_chunks=10)
+    test_pcm = struct.pack("<h", 1000) * 10
+    frame = AudioFrame(data=test_pcm, sequence=1, timestamp_us=1000, rms_volume=0.5)
+
+    player.set_volume(0.5)
+    player.enqueue_frame(frame)
+    dequeued = player.dequeue_chunk()
+    assert dequeued is not None
+    # 1000 * 0.5 = 500
+    (first_sample,) = struct.unpack_from("<h", dequeued.data, 0)
+    assert first_sample == 500
+
+    # Client mute returns silence
+    player.set_muted(True)
+    player.enqueue_frame(frame)
+    muted_chunk = player.dequeue_chunk()
+    assert muted_chunk is not None
+    assert muted_chunk.data == b"\x00" * len(test_pcm)
+
+
+def test_audio_jitter_buffer_health_gauge_stats() -> None:
+    player = AudioPlayerAdapter(max_buffer_chunks=2)
+
+    # Empty dequeue increments underruns
+    assert player.dequeue_chunk() is None
+    stats = player.get_stats()
+    assert stats["underruns"] == 1
+
+    # Fill and cause overflow
+    player.enqueue_frame(AudioFrame(data=b"a" * 16, sequence=1, timestamp_us=1000))
+    player.enqueue_frame(AudioFrame(data=b"b" * 16, sequence=2, timestamp_us=2000))
+    assert player.enqueue_frame(AudioFrame(data=b"c" * 16, sequence=3, timestamp_us=3000)) is False
+
+    stats = player.get_stats()
+    assert stats["queue_size"] == 2
+    assert stats["dropped_overflow"] == 1
+    assert stats["drop_percentage"] > 0.0
+    assert stats["buffer_latency_ms"] == 40.0
+
+    # Reset clears all counters
+    player.reset()
+    clean_stats = player.get_stats()
+    assert clean_stats["queue_size"] == 0
+    assert clean_stats["dropped_overflow"] == 0
+    assert clean_stats["underruns"] == 0
+    assert clean_stats["drop_percentage"] == 0.0
+
+
+def test_ui_audio_settings_integration(qapp) -> None:
+    import os
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    from dualdesk.ui.app import DualDeskApp
+
+    window = DualDeskApp()
+    try:
+        assert hasattr(window, "chk_audio_forwarding")
+        assert hasattr(window, "chk_audio_mute")
+        assert hasattr(window, "audio_volume_slider")
+        assert hasattr(window, "lbl_audio_volume")
+        assert hasattr(window, "lbl_audio_jitter_stats")
+        assert hasattr(window, "btn_reset_audio_stats")
+
+        # Test volume slider changes
+        window.audio_volume_slider.setValue(125)
+        assert window.lbl_audio_volume.text() == "125%"
+        assert window.audio_player.volume == 1.25
+
+        # Test mute toggle
+        window.chk_audio_mute.setChecked(True)
+        assert window.audio_player.is_muted is True
+
+        # Test reset stats button
+        window.audio_player._underruns = 5
+        window.btn_reset_audio_stats.click()
+        assert window.audio_player.get_stats()["underruns"] == 0
+    finally:
+        window.close()
+

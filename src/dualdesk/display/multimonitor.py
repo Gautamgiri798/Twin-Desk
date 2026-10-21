@@ -4,6 +4,7 @@ import ctypes
 import math
 import platform
 from dataclasses import dataclass, field
+from enum import Enum
 
 
 class POINT(ctypes.Structure):
@@ -121,6 +122,13 @@ class DisplayGeometry:
         return left <= px <= right and top <= py <= bottom
 
 
+class DisplayPlacement(str, Enum):
+    RIGHT = "right"
+    LEFT = "left"
+    ABOVE = "above"
+    BELOW = "below"
+
+
 @dataclass
 class VirtualDesktopLayout:
     displays: list[DisplayGeometry] = field(default_factory=list)
@@ -129,6 +137,7 @@ class VirtualDesktopLayout:
     virtual_width: int = 1920
     virtual_height: int = 1080
     edge_resistance_px: float = 12.0
+    placement: DisplayPlacement = DisplayPlacement.RIGHT
 
     @classmethod
     def from_system_metrics(
@@ -137,73 +146,108 @@ class VirtualDesktopLayout:
         virtual_height: int | None = None,
         secondary_width: int = 1920,
         secondary_height: int = 1080,
+        placement: DisplayPlacement | str = DisplayPlacement.RIGHT,
     ) -> VirtualDesktopLayout:
         """
         Constructs multimonitor layout using Windows GetSystemMetrics
         or provided geometry overrides for virtual extended displays.
         """
+        if isinstance(placement, str):
+            placement = DisplayPlacement(placement.lower())
+
+        pri_w = 1920
+        pri_h = 1080
         if platform.system() == "Windows":
             try:
                 user32 = ctypes.windll.user32
-                # SM_XVIRTUALSCREEN = 76, SM_YVIRTUALSCREEN = 77
-                # SM_CXVIRTUALSCREEN = 78, SM_CYVIRTUALSCREEN = 79
-                # SM_CXSCREEN = 0, SM_CYSCREEN = 1
-                vx = user32.GetSystemMetrics(76)
-                vy = user32.GetSystemMetrics(77)
-                vw = user32.GetSystemMetrics(78)
-                vh = user32.GetSystemMetrics(79)
-                pri_w = user32.GetSystemMetrics(0)
-                pri_h = user32.GetSystemMetrics(1)
-
-                pri_dpi_x, pri_dpi_y = get_dpi_for_point(0, 0)
-                primary = DisplayGeometry(
-                    x=0,
-                    y=0,
-                    width=pri_w or 1920,
-                    height=pri_h or 1080,
-                    is_primary=True,
-                    device_name="PrimaryDisplay",
-                    dpi_x=pri_dpi_x,
-                    dpi_y=pri_dpi_y,
-                )
-
-                # Secondary display positioned to the right of primary monitor
-                sec_x = pri_w or 1920
-                sec_dpi_x, sec_dpi_y = get_dpi_for_point(sec_x, 0)
-                secondary = DisplayGeometry(
-                    x=sec_x,
-                    y=0,
-                    width=secondary_width,
-                    height=secondary_height,
-                    is_primary=False,
-                    device_name="SecondaryVirtualDisplay",
-                    dpi_x=sec_dpi_x,
-                    dpi_y=sec_dpi_y,
-                )
-
-                total_vw = max(vw or (pri_w + secondary_width), pri_w + secondary_width)
-                total_vh = max(vh or max(pri_h, secondary_height), max(pri_h, secondary_height))
-
-                return cls(
-                    displays=[primary, secondary],
-                    virtual_x=vx or 0,
-                    virtual_y=vy or 0,
-                    virtual_width=total_vw,
-                    virtual_height=total_vh,
-                )
+                pri_w = user32.GetSystemMetrics(0) or 1920
+                pri_h = user32.GetSystemMetrics(1) or 1080
             except (AttributeError, OSError):
                 pass
 
-        # Fallback layout: Primary 1920x1080 at (0,0) + Secondary 1920x1080 at (1920,0)
-        pri = DisplayGeometry(0, 0, 1920, 1080, is_primary=True, device_name="Primary", dpi_x=96, dpi_y=96)
-        sec = DisplayGeometry(1920, 0, secondary_width, secondary_height, is_primary=False, device_name="Secondary", dpi_x=96, dpi_y=96)
-        return cls(
-            displays=[pri, sec],
+        pri_dpi_x, pri_dpi_y = get_dpi_for_point(0, 0)
+        primary = DisplayGeometry(
+            x=0,
+            y=0,
+            width=pri_w,
+            height=pri_h,
+            is_primary=True,
+            device_name="PrimaryDisplay",
+            dpi_x=pri_dpi_x,
+            dpi_y=pri_dpi_y,
+        )
+
+        sec_dpi_x, sec_dpi_y = get_dpi_for_point(pri_w, 0)
+        secondary = DisplayGeometry(
+            x=pri_w,
+            y=0,
+            width=secondary_width,
+            height=secondary_height,
+            is_primary=False,
+            device_name="SecondaryVirtualDisplay",
+            dpi_x=sec_dpi_x,
+            dpi_y=sec_dpi_y,
+        )
+
+        layout = cls(
+            displays=[primary, secondary],
             virtual_x=0,
             virtual_y=0,
-            virtual_width=1920 + secondary_width,
-            virtual_height=max(1080, secondary_height),
+            virtual_width=pri_w + secondary_width,
+            virtual_height=max(pri_h, secondary_height),
+            placement=placement,
         )
+        layout.set_secondary_placement(placement, secondary_width, secondary_height)
+        return layout
+
+    def set_secondary_placement(
+        self,
+        placement: DisplayPlacement | str,
+        secondary_width: int | None = None,
+        secondary_height: int | None = None,
+    ) -> None:
+        """
+        Positions the secondary/virtual display relative to the primary display.
+        Updates virtual desktop bounding box and coordinate mapping.
+        """
+        if isinstance(placement, str):
+            placement = DisplayPlacement(placement.lower())
+
+        self.placement = placement
+
+        primary = next((d for d in self.displays if d.is_primary), None)
+        secondary = next((d for d in self.displays if not d.is_primary), None)
+
+        if not primary or not secondary:
+            return
+
+        sec_w = secondary_width or secondary.width
+        sec_h = secondary_height or secondary.height
+        secondary.width = sec_w
+        secondary.height = sec_h
+
+        if placement == DisplayPlacement.RIGHT:
+            secondary.x = primary.x + primary.width
+            secondary.y = primary.y
+        elif placement == DisplayPlacement.LEFT:
+            secondary.x = primary.x - sec_w
+            secondary.y = primary.y
+        elif placement == DisplayPlacement.ABOVE:
+            secondary.x = primary.x
+            secondary.y = primary.y - sec_h
+        elif placement == DisplayPlacement.BELOW:
+            secondary.x = primary.x
+            secondary.y = primary.y + primary.height
+
+        min_x = min(d.x for d in self.displays)
+        min_y = min(d.y for d in self.displays)
+        max_x = max(d.x + d.width for d in self.displays)
+        max_y = max(d.y + d.height for d in self.displays)
+
+        self.virtual_x = min_x
+        self.virtual_y = min_y
+        self.virtual_width = max_x - min_x
+        self.virtual_height = max_y - min_y
 
     def get_target_display(self, index: int = -1) -> DisplayGeometry:
         if not self.displays:

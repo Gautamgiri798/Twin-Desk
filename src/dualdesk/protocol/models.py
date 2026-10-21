@@ -24,6 +24,8 @@ class ErrorCode(str, Enum):
     AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED"
     SESSION_EXPIRED = "SESSION_EXPIRED"
     INPUT_REJECTED = "INPUT_REJECTED"
+    FILE_TRANSFER_REJECTED = "FILE_TRANSFER_REJECTED"
+    FILE_TRANSFER_ERROR = "FILE_TRANSFER_ERROR"
 
 
 class MessageType(str, Enum):
@@ -65,6 +67,14 @@ class MessageType(str, Enum):
 
     # Clipboard
     CLIPBOARD_UPDATE = "clipboard.update"
+
+    # File transfer
+    FILE_TRANSFER_REQUEST = "file.transfer.request"
+    FILE_TRANSFER_ACCEPT = "file.transfer.accept"
+    FILE_TRANSFER_REJECT = "file.transfer.reject"
+    FILE_TRANSFER_CHUNK = "file.transfer.chunk"
+    FILE_TRANSFER_COMPLETE = "file.transfer.complete"
+    FILE_TRANSFER_CANCEL = "file.transfer.cancel"
 
     # Telemetry
     TELEMETRY_STATS = "telemetry.stats"
@@ -326,6 +336,40 @@ class ClipboardUpdatePayload:
     format: str = "text/plain"
     sender_device_id: str = ""
     timestamp_us: int = 0
+
+
+@dataclass
+class FileTransferRequestPayload:
+    transfer_id: str
+    file_name: str
+    file_size_bytes: int
+    file_sha256: str
+    sender_device_id: str = ""
+    mime_type: str = "application/octet-stream"
+
+
+@dataclass
+class FileTransferAcceptPayload:
+    transfer_id: str
+    accepted: bool
+    reason: str = ""
+
+
+@dataclass
+class FileTransferChunkPayload:
+    transfer_id: str
+    chunk_index: int
+    total_chunks: int
+    data_b64: str
+    chunk_sha256: str
+
+
+@dataclass
+class FileTransferCompletePayload:
+    transfer_id: str
+    status: str = "success"
+    final_sha256: str = ""
+    message: str = ""
 
 
 @dataclass

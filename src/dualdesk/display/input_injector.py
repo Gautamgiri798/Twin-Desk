@@ -50,10 +50,16 @@ class InputInjector:
     def update_bounds(self, width: int, height: int) -> None:
         self.display_width = max(1, width)
         self.display_height = max(1, height)
+        curr_placement = self.layout.placement if self.layout else "right"
         self.layout = VirtualDesktopLayout.from_system_metrics(
             secondary_width=self.display_width,
             secondary_height=self.display_height,
+            placement=curr_placement,
         )
+
+    def set_placement(self, placement: str) -> None:
+        if self.layout:
+            self.layout.set_secondary_placement(placement)
 
     def inject_pointer(
         self,

@@ -20,8 +20,13 @@ class ClipboardAdapter:
     access on Windows, and thread-safe fallback buffer in headless/test environments.
     """
 
-    def __init__(self, on_change: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        on_change: Callable[[str], None] | None = None,
+        in_memory_only: bool = False,
+    ) -> None:
         self.on_change = on_change
+        self.in_memory_only = in_memory_only
         self._last_sent_hash: str | None = None
         self._last_received_hash: str | None = None
         self._in_memory_text: str = ""
@@ -32,6 +37,10 @@ class ClipboardAdapter:
 
     def get_text(self) -> str:
         """Retrieves current clipboard text from Qt, Win32, or fallback buffer."""
+        if self.in_memory_only:
+            with self._lock:
+                return self._in_memory_text
+
         # 1. Try Qt if QApplication exists
         try:
             from PySide6.QtWidgets import QApplication
@@ -73,6 +82,9 @@ class ClipboardAdapter:
         with self._lock:
             self._last_received_hash = text_hash
             self._in_memory_text = text
+
+        if self.in_memory_only:
+            return True
 
         success = True
 

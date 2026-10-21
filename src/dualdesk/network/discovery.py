@@ -200,3 +200,111 @@ class DiscoveryService:
                 continue
 
         sock.close()
+
+
+@dataclass
+class FirewallStatus:
+    is_firewall_checked: bool
+    is_firewall_ok: bool
+    blocked_ports: list[int]
+    status_summary: str
+    can_configure: bool
+
+
+def check_firewall_status(
+    discovery_port: int = 53891,
+    control_port: int = 53892,
+    media_port: int = 53893,
+) -> FirewallStatus:
+    """Checks if Windows Defender Firewall has explicit rules for DualDesk ports."""
+    import platform
+    import subprocess
+    from pathlib import Path
+
+    if platform.system() != "Windows":
+        return FirewallStatus(
+            is_firewall_checked=True,
+            is_firewall_ok=True,
+            blocked_ports=[],
+            status_summary="Non-Windows platform; Windows Firewall not applicable.",
+            can_configure=False,
+        )
+
+    script_path = (
+        Path(__file__).resolve().parents[3] / "scripts" / "configure_firewall.ps1"
+    )
+    if script_path.exists():
+        try:
+            proc = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script_path),
+                    "-CheckOnly",
+                    "-DiscoveryPort",
+                    str(discovery_port),
+                    "-ControlPort",
+                    str(control_port),
+                    "-MediaPort",
+                    str(media_port),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=6.0,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            output = proc.stdout
+            missing: list[int] = []
+            if f"UDP {discovery_port}" in output and "Missing rule" in output:
+                missing.append(discovery_port)
+            if f"TCP {control_port}" in output and "Missing rule" in output:
+                missing.append(control_port)
+            if f"TCP {media_port}" in output and "Missing rule" in output:
+                missing.append(media_port)
+
+            if missing:
+                return FirewallStatus(
+                    is_firewall_checked=True,
+                    is_firewall_ok=False,
+                    blocked_ports=missing,
+                    status_summary=(
+                        f"Firewall rules missing for ports: {missing}. "
+                        "Run scripts/configure_firewall.ps1 to allow."
+                    ),
+                    can_configure=True,
+                )
+            return FirewallStatus(
+                is_firewall_checked=True,
+                is_firewall_ok=True,
+                blocked_ports=[],
+                status_summary="Windows Firewall allows inbound DualDesk traffic.",
+                can_configure=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    return FirewallStatus(
+        is_firewall_checked=False,
+        is_firewall_ok=True,
+        blocked_ports=[],
+        status_summary="Firewall check skipped or toolchain unavailable.",
+        can_configure=True,
+    )
+
+
+def get_local_ip() -> str:
+    """Detect active local LAN IP address for peer connection."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return str(s.getsockname()[0])
+    except OSError:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return "127.0.0.1"
+
+

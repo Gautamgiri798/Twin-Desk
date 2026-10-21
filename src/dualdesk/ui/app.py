@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSlider,
     QStackedWidget,
+    QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -32,9 +34,17 @@ from dualdesk.diagnostics.bundle import DiagnosticBundleGenerator
 from dualdesk.display.adaptive import AdaptiveRateController
 from dualdesk.display.capture import ScreenCaptureAdapter
 from dualdesk.display.driver import check_virtual_display_driver, get_supported_modes
+from dualdesk.display.encoder import get_encoder_diagnostic_summary
 from dualdesk.display.multimonitor import enable_per_monitor_dpi_awareness
-from dualdesk.network.discovery import DiscoveredDevice, DiscoveryBeacon, DiscoveryService
+from dualdesk.network.discovery import (
+    DiscoveredDevice,
+    DiscoveryBeacon,
+    DiscoveryService,
+    check_firewall_status,
+    get_local_ip,
+)
 from dualdesk.network.transport import ConnectionManager, ConnectionState, SessionTelemetry
+from dualdesk.platform.autostart import is_auto_start_enabled, set_auto_start
 from dualdesk.protocol.models import ProtocolError
 from dualdesk.security.identity import DeviceIdentity, get_or_create_device_identity
 from dualdesk.security.pairing import PairingManager
@@ -42,6 +52,8 @@ from dualdesk.security.tls import get_or_create_tls_credentials
 from dualdesk.storage.db import DualDeskDB
 from dualdesk.ui.components import (
     DeviceCard,
+    DisplayArrangementCard,
+    DriverInstallWizardDialog,
     FramerateGraphCard,
     LatencyGraphCard,
     LiveMetricStrip,
@@ -49,13 +61,14 @@ from dualdesk.ui.components import (
     PairingDialog,
     StatCard,
     TelemetrySample,
+    create_tray_icon,
 )
 from dualdesk.ui.theme import DARK_THEME_QSS
 from dualdesk.ui.viewer import StreamViewerWidget, StreamWindow
 
 
 class DualDeskApp(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, role_override: str | None = None) -> None:
         super().__init__()
         self.setWindowTitle("DualDesk — Extended Desktop & Input Utility")
         self.resize(1080, 720)
@@ -67,9 +80,14 @@ class DualDeskApp(QMainWindow):
         self.pairing_manager = PairingManager(self.db, self.identity.fingerprint)
         self.driver_status = check_virtual_display_driver()
         self.telemetry_history: deque[TelemetrySample] = deque(maxlen=60)
+        self.local_ip = get_local_ip()
 
-        saved_role = self.db.get_setting("role", "host")
-        self.role = saved_role
+        saved_role = str(self.db.get_setting("role", "host"))
+        if role_override and role_override.lower() in ("host", "client"):
+            self.role = role_override.lower()
+            self.db.set_setting("role", self.role)
+        else:
+            self.role = saved_role
 
         self.beacon = DiscoveryBeacon(
             device_id=self.identity.device_id,
@@ -119,10 +137,27 @@ class DualDeskApp(QMainWindow):
         if self.role == "host":
             self.connection_manager.start_control_server()
 
+        saved_placement = str(self.db.get_setting("secondary_display_placement", "right"))
+        self.display_placement = saved_placement
+        if self.connection_manager.input_injector:
+            self.connection_manager.input_injector.set_placement(saved_placement)
+
+        saved_escape = str(self.db.get_setting("escape_shortcut", "Ctrl+Alt+Shift+Escape"))
+        self.escape_shortcut = saved_escape
+        self.connection_manager.set_escape_shortcut(saved_escape)
+
+        saved_lockout = bool(self.db.get_setting("host_input_lockout", False))
+        self.host_input_lockout = saved_lockout
+        self.connection_manager.set_host_input_lockout(saved_lockout)
+
         self.diagnostics_gen = DiagnosticBundleGenerator(self.db)
 
         # Setup UI
         self._build_ui()
+
+        # System Tray Integration (TASK-09)
+        self._force_quit: bool = False
+        self._setup_system_tray()
 
         # Telemetry and state update timer
         self.update_timer = QTimer(self)
@@ -315,6 +350,15 @@ class DualDeskApp(QMainWindow):
         title.setStyleSheet("font-size: 22px; font-weight: 700; color: #f8fafc;")
         layout.addWidget(title)
 
+        # Firewall Status Banner
+        self.firewall_status = check_firewall_status()
+        if not self.firewall_status.is_firewall_ok:
+            self.firewall_banner = NoticeBanner(
+                f"Windows Defender Firewall may restrict local discovery. Blocked ports: {self.firewall_status.blocked_ports}. "
+                "Run scripts/configure_firewall.ps1 to configure rules."
+            )
+            layout.addWidget(self.firewall_banner)
+
         # Manual Connect Box
         manual_box = QFrame()
         manual_box.setProperty("class", "Card")
@@ -375,6 +419,11 @@ class DualDeskApp(QMainWindow):
                 QLabel("⚠️ IDD driver is not installed. To enable true extended display, compile and install native driver in native/.")
             )
 
+        self.btn_driver_wizard = QPushButton("Open Driver Installation Wizard")
+        self.btn_driver_wizard.setProperty("class", "SecondaryButton")
+        self.btn_driver_wizard.clicked.connect(self._open_driver_wizard)
+        f_layout.addWidget(self.btn_driver_wizard)
+
         f_layout.addSpacing(10)
 
         # Resolution Selector
@@ -394,8 +443,20 @@ class DualDeskApp(QMainWindow):
         f_layout.addWidget(self.chk_fullscreen)
 
         layout.addWidget(form_card)
+
+        # Multi-Monitor Virtual Display Arrangement Map (TASK-08)
+        self.arrangement_card = DisplayArrangementCard(initial_placement=self.display_placement)
+        self.arrangement_card.placement_changed.connect(self._on_display_placement_changed)
+        layout.addWidget(self.arrangement_card)
+
         layout.addStretch(1)
         return page
+
+    def _on_display_placement_changed(self, placement: str) -> None:
+        self.display_placement = placement
+        self.db.set_setting("secondary_display_placement", placement)
+        if self.connection_manager.input_injector:
+            self.connection_manager.input_injector.set_placement(placement)
 
     # 4. Stream View Page
     def _build_stream_page(self) -> QWidget:
@@ -425,6 +486,10 @@ class DualDeskApp(QMainWindow):
         self._stream_window.show()
         self._stream_window.raise_()
         self._stream_window.activateWindow()
+
+    def _open_driver_wizard(self) -> None:
+        wizard = DriverInstallWizardDialog(self)
+        wizard.exec()
 
     def _on_stream_frame_received(self, frame_bytes: bytes) -> None:
         self.stream_viewer.update_frame(frame_bytes)
@@ -468,12 +533,42 @@ class DualDeskApp(QMainWindow):
         b_row.addWidget(self.bitrate_val_label)
         c_layout.addLayout(b_row)
 
-        # Hardware Encoding
-        hw_label = QLabel("Encoder: DXGI Desktop Duplication + H.264 Software Fallback")
-        hw_label.setStyleSheet("color: #94a3b8;")
-        c_layout.addWidget(hw_label)
-
         layout.addWidget(card)
+
+        # Hardware Video Encoder Status & Diagnostics Card (TASK-07)
+        enc_card = QFrame()
+        enc_card.setProperty("class", "Card")
+        e_layout = QVBoxLayout(enc_card)
+
+        e_header = QHBoxLayout()
+        e_title = QLabel("Hardware Video Encoder Diagnostics")
+        e_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #38bdf8;")
+        e_header.addWidget(e_title)
+        e_header.addStretch(1)
+
+        self.lbl_encoder_badge = QLabel()
+        e_header.addWidget(self.lbl_encoder_badge)
+        e_layout.addLayout(e_header)
+
+        e_details_grid = QVBoxLayout()
+        e_details_grid.setSpacing(6)
+
+        self.lbl_encoder_backend = QLabel()
+        self.lbl_encoder_backend.setStyleSheet("font-size: 13px; font-weight: 600; color: #f8fafc;")
+        e_details_grid.addWidget(self.lbl_encoder_backend)
+
+        self.lbl_encoder_profile = QLabel()
+        self.lbl_encoder_profile.setStyleSheet("font-size: 12px; color: #94a3b8;")
+        e_details_grid.addWidget(self.lbl_encoder_profile)
+
+        self.lbl_encoder_explanation = QLabel()
+        self.lbl_encoder_explanation.setWordWrap(True)
+        self.lbl_encoder_explanation.setStyleSheet("font-size: 12px; color: #64748b; margin-top: 4px;")
+        e_details_grid.addWidget(self.lbl_encoder_explanation)
+
+        e_layout.addLayout(e_details_grid)
+        self._refresh_encoder_diagnostics()
+        layout.addWidget(enc_card)
 
         # Performance History Graphs Row
         graphs_row = QHBoxLayout()
@@ -578,14 +673,121 @@ class DualDeskApp(QMainWindow):
         self.connection_manager.clipboard_guard.enabled = sync_enabled
         c_layout.addWidget(self.chk_clipboard_sync)
 
-        # Emergency Escape Info
-        escape_info = QLabel(
-            "Emergency Pointer/Keyboard Escape: Press Ctrl + Alt + Shift + Escape at any time "
-            "to revoke remote input authority and return control to the host."
+        # Audio Streaming & Playback Controls Card
+        c_layout.addSpacing(10)
+        audio_card = QFrame()
+        audio_card.setStyleSheet("background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px;")
+        a_layout = QVBoxLayout(audio_card)
+
+        a_title = QLabel("REMOTE AUDIO STREAMING & JITTER BUFFER")
+        a_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8; letter-spacing: 0.5px;")
+        a_layout.addWidget(a_title)
+
+        self.chk_audio_forwarding = QCheckBox("Enable Audio Forwarding (16-bit PCM @ 48kHz Stereo)")
+        audio_forwarding_enabled = bool(self.db.get_setting("audio_forwarding_enabled", True))
+        self.chk_audio_forwarding.setChecked(audio_forwarding_enabled)
+        self.chk_audio_forwarding.toggled.connect(self._on_audio_forwarding_toggled)
+        a_layout.addWidget(self.chk_audio_forwarding)
+
+        # Volume & Mute Row
+        v_row = QHBoxLayout()
+        self.chk_audio_mute = QCheckBox("Mute Audio")
+        self.chk_audio_mute.setChecked(False)
+        self.chk_audio_mute.toggled.connect(self._on_audio_mute_toggled)
+        v_row.addWidget(self.chk_audio_mute)
+
+        v_row.addWidget(QLabel("Volume:"))
+        self.audio_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.audio_volume_slider.setRange(0, 150)
+        self.audio_volume_slider.setValue(100)
+        self.audio_volume_slider.valueChanged.connect(self._on_audio_volume_changed)
+        v_row.addWidget(self.audio_volume_slider)
+
+        self.lbl_audio_volume = QLabel("100%")
+        self.lbl_audio_volume.setStyleSheet("font-weight: 600; color: #38bdf8;")
+        v_row.addWidget(self.lbl_audio_volume)
+        a_layout.addLayout(v_row)
+
+        # Jitter Buffer Health Gauge
+        self.lbl_audio_jitter_stats = QLabel(
+            "Jitter Buffer: 0 frames (0.0 ms) | Overflows: 0 (0.0%) | Underruns: 0"
         )
-        escape_info.setWordWrap(True)
-        escape_info.setStyleSheet("color: #38bdf8; padding: 10px; background: #0f172a; border-radius: 6px;")
-        c_layout.addWidget(escape_info)
+        self.lbl_audio_jitter_stats.setStyleSheet("font-size: 11px; color: #94a3b8; font-family: monospace;")
+        a_layout.addWidget(self.lbl_audio_jitter_stats)
+
+        self.btn_reset_audio_stats = QPushButton("Reset Audio Buffer Counters")
+        self.btn_reset_audio_stats.setProperty("class", "SecondaryButton")
+        self.btn_reset_audio_stats.clicked.connect(self._on_reset_audio_stats)
+        a_layout.addWidget(self.btn_reset_audio_stats)
+
+        c_layout.addWidget(audio_card)
+
+        # System Tray & Startup Card (TASK-09)
+        c_layout.addSpacing(10)
+        tray_card = QFrame()
+        tray_card.setStyleSheet("background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px;")
+        t_layout = QVBoxLayout(tray_card)
+
+        t_title = QLabel("SYSTEM TRAY & WINDOWS STARTUP")
+        t_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8; letter-spacing: 0.5px;")
+        t_layout.addWidget(t_title)
+
+        self.chk_minimize_to_tray = QCheckBox("Minimize to System Tray on Window Close")
+        min_to_tray = bool(self.db.get_setting("minimize_to_tray", True))
+        self.chk_minimize_to_tray.setChecked(min_to_tray)
+        self.chk_minimize_to_tray.toggled.connect(lambda chk: self.db.set_setting("minimize_to_tray", chk))
+        t_layout.addWidget(self.chk_minimize_to_tray)
+
+        self.chk_auto_start = QCheckBox("Start DualDesk Minimized with Windows on Login")
+        self.chk_auto_start.setChecked(is_auto_start_enabled())
+        self.chk_auto_start.toggled.connect(self._on_auto_start_toggled)
+        t_layout.addWidget(self.chk_auto_start)
+
+        c_layout.addWidget(tray_card)
+
+        # Security & Input Controls Card (TASK-10)
+        c_layout.addSpacing(10)
+        sec_input_card = QFrame()
+        sec_input_card.setStyleSheet("background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 12px;")
+        s_layout = QVBoxLayout(sec_input_card)
+
+        s_title = QLabel("INPUT ROUTING & EMERGENCY ESCAPE SHORTCUT")
+        s_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8; letter-spacing: 0.5px;")
+        s_layout.addWidget(s_title)
+
+        esc_row = QHBoxLayout()
+        esc_row.addWidget(QLabel("Emergency Escape Combination:"))
+        self.combo_escape = QComboBox()
+        from dualdesk.security.input_filter import AVAILABLE_ESCAPE_SHORTCUTS
+
+        for sc in AVAILABLE_ESCAPE_SHORTCUTS:
+            self.combo_escape.addItem(sc)
+        cur_idx = self.combo_escape.findText(self.escape_shortcut)
+        if cur_idx != -1:
+            self.combo_escape.setCurrentIndex(cur_idx)
+        self.combo_escape.currentTextChanged.connect(self._on_escape_shortcut_changed)
+        esc_row.addWidget(self.combo_escape)
+        esc_row.addStretch(1)
+        s_layout.addLayout(esc_row)
+
+        self.chk_host_lockout = QCheckBox("Enable Host Physical Input Lockout during Active Remote Control")
+        self.chk_host_lockout.setToolTip(
+            "Suppresses local host physical mouse/keyboard events while remote client is actively controlling. "
+            "The emergency escape shortcut always immediately revokes remote authority and restores host control."
+        )
+        self.chk_host_lockout.setChecked(self.host_input_lockout)
+        self.chk_host_lockout.toggled.connect(self._on_host_lockout_toggled)
+        s_layout.addWidget(self.chk_host_lockout)
+
+        esc_desc = QLabel(
+            "Pressing the emergency shortcut at any time unconditionally revokes remote input authority, "
+            "synthesizes release of all keys/buttons, and returns immediate control to the host."
+        )
+        esc_desc.setWordWrap(True)
+        esc_desc.setStyleSheet("color: #38bdf8; font-size: 11px; margin-top: 4px;")
+        s_layout.addWidget(esc_desc)
+
+        c_layout.addWidget(sec_input_card)
 
         c_layout.addSpacing(10)
 
@@ -598,6 +800,40 @@ class DualDeskApp(QMainWindow):
         layout.addWidget(card)
         layout.addStretch(1)
         return page
+
+    def _on_audio_forwarding_toggled(self, checked: bool) -> None:
+        self.db.set_setting("audio_forwarding_enabled", checked)
+        if not checked:
+            self.connection_manager.set_audio_muted(True)
+        else:
+            self.connection_manager.set_audio_muted(self.chk_audio_mute.isChecked())
+
+    def _on_audio_mute_toggled(self, checked: bool) -> None:
+        self.connection_manager.set_audio_muted(checked)
+
+    def _on_audio_volume_changed(self, value: int) -> None:
+        volume = value / 100.0
+        self.lbl_audio_volume.setText(f"{value}%")
+        self.connection_manager.set_audio_volume(volume)
+
+    def _on_reset_audio_stats(self) -> None:
+        self.audio_player.reset()
+        stats = self.audio_player.get_stats()
+        self.lbl_audio_jitter_stats.setText(
+            f"Jitter Buffer: {stats['queue_size']} frames ({stats['buffer_latency_ms']:.1f} ms) | "
+            f"Overflows: {stats['dropped_overflow']} ({stats['drop_percentage']:.1f}%) | "
+            f"Underruns: {stats['underruns']}"
+        )
+
+    def _on_escape_shortcut_changed(self, text: str) -> None:
+        self.escape_shortcut = text
+        self.db.set_setting("escape_shortcut", text)
+        self.connection_manager.set_escape_shortcut(text)
+
+    def _on_host_lockout_toggled(self, checked: bool) -> None:
+        self.host_input_lockout = checked
+        self.db.set_setting("host_input_lockout", checked)
+        self.connection_manager.set_host_input_lockout(checked)
 
     # Event handlers
     def _on_resolution_changed(self, idx: int) -> None:
@@ -613,8 +849,9 @@ class DualDeskApp(QMainWindow):
             if self.connection_manager.input_filter:
                 self.connection_manager.input_filter.update_bounds(mode.width, mode.height)
             if self.connection_manager.input_injector:
-                self.connection_manager.input_injector.display_width = mode.width
-                self.connection_manager.input_injector.display_height = mode.height
+                self.connection_manager.input_injector.update_bounds(mode.width, mode.height)
+            if hasattr(self, "arrangement_card"):
+                self.arrangement_card.canvas.set_resolutions("1920x1080", f"{mode.width}x{mode.height}")
             if self.connection_manager.state == ConnectionState.STREAMING:
                 self.connection_manager.broadcast_display_mode(mode)
 
@@ -708,18 +945,50 @@ class DualDeskApp(QMainWindow):
     def _on_connection_state_changed(self, state: ConnectionState, detail: str) -> None:
         is_active = state == ConnectionState.STREAMING
         self.card_conn.update_values(state.value, detail or "Session state updated", is_active=is_active)
+        if hasattr(self, "tray_icon"):
+            self.tray_icon.setIcon(create_tray_icon(state.value))
+        if hasattr(self, "tray_status_action"):
+            self.tray_status_action.setText(f"Status: {state.value.capitalize()}")
+        if hasattr(self, "tray_connect_action"):
+            self.tray_connect_action.setText("Disconnect Session" if is_active else "Start Session")
+
         if state == ConnectionState.STREAMING:
             self.card_stream.update_values(
                 "Streaming",
                 self.capture_adapter.source_label,
                 is_active=True,
             )
+            self.btn_connect.setText("Disconnect Session")
             if self.chk_clipboard_sync.isChecked():
                 self.connection_manager.clipboard_adapter.start_monitoring()
+        elif state == ConnectionState.RECOVERING:
+            self.card_conn.update_values("Recovering", detail or "Attempting automatic reconnection...", is_active=False)
+            self.card_stream.update_values("Interrupted", "Attempting automatic reconnect...", is_active=False)
+            self.btn_connect.setText("Cancel Reconnect")
         elif state in (ConnectionState.DISCONNECTED, ConnectionState.NOT_CONNECTED):
             self.card_stream.update_values("Inactive", "No active frame transmission.", is_active=False)
             self.btn_connect.setText("Start Session")
             self.connection_manager.clipboard_adapter.stop_monitoring()
+
+    def _toggle_connection(self) -> None:
+        if self.connection_manager.state == ConnectionState.STREAMING:
+            self.connection_manager.disconnect(reason="User disconnect")
+        elif self.connection_manager.state == ConnectionState.RECOVERING:
+            self.connection_manager.cancel_reconnect()
+        else:
+            if self.role == "client":
+                paired = self.db.list_devices()
+                if paired:
+                    dev = paired[0]
+                    self.connection_manager.connect(
+                        peer_device_id=dev.device_id,
+                        peer_fingerprint=dev.fingerprint,
+                        peer_address=dev.last_known_ip or "127.0.0.1",
+                    )
+                else:
+                    self._switch_page(1)
+            else:
+                self._switch_page(1)
 
     def _on_display_mode_changed(self, width: int, height: int, fps: int) -> None:
         """Adapts capture resolution on host when remote client negotiates target mode."""
@@ -833,6 +1102,15 @@ class DualDeskApp(QMainWindow):
                 codec=stats.codec,
             )
 
+        if hasattr(self, "lbl_audio_jitter_stats"):
+            astats = self.audio_player.get_stats()
+            self.lbl_audio_jitter_stats.setText(
+                f"Jitter Buffer: {astats['queue_size']} frames ({astats['buffer_latency_ms']:.1f} ms) | "
+                f"Overflows: {astats['dropped_overflow']} ({astats['drop_percentage']:.1f}%) | "
+                f"Underruns: {astats['underruns']}"
+            )
+
+
     def _refresh_devices_table(self) -> None:
         # Discovered peers
         discovered = self.discovery.get_discovered_devices()
@@ -923,6 +1201,30 @@ class DualDeskApp(QMainWindow):
                 f"Redacted diagnostic bundle successfully saved to:\n{file_path}\n\nIPs and secrets have been redacted.",
             )
 
+    def _refresh_encoder_diagnostics(self) -> None:
+        summary = get_encoder_diagnostic_summary()
+        self.encoder_summary = summary
+        is_hw = summary["is_hardware_accelerated"]
+        if is_hw:
+            self.lbl_encoder_badge.setText("HARDWARE ACCELERATED")
+            self.lbl_encoder_badge.setStyleSheet(
+                "background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid #10b981; "
+                "padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;"
+            )
+        else:
+            self.lbl_encoder_badge.setText("SOFTWARE FALLBACK")
+            self.lbl_encoder_badge.setStyleSheet(
+                "background: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid #f59e0b; "
+                "padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;"
+            )
+
+        self.lbl_encoder_backend.setText(f"Active Backend: {summary['preferred_backend_name']}")
+        codecs_str = ", ".join(c.upper() for c in summary["supported_codecs"])
+        self.lbl_encoder_profile.setText(
+            f"Profile: {summary['profile']} | Codecs: {codecs_str} | Max: {summary['max_resolution']} @ {summary['max_fps']} FPS"
+        )
+        self.lbl_encoder_explanation.setText(summary["explanation"])
+
     def _clear_all_data(self) -> None:
         res = QMessageBox.question(
             self,
@@ -938,7 +1240,72 @@ class DualDeskApp(QMainWindow):
             self._refresh_diagnostics_table()
             QMessageBox.information(self, "Data Cleared", "Trust store and local history cleared.")
 
+    def _setup_system_tray(self) -> None:
+        self.tray_icon = QSystemTrayIcon(create_tray_icon("inactive"), self)
+        self.tray_icon.setToolTip("DualDesk — Extended Display Utility")
+
+        tray_menu = QMenu()
+        act_show = tray_menu.addAction("Show DualDesk")
+        act_show.triggered.connect(self._show_from_tray)
+
+        self.tray_status_action = tray_menu.addAction("Status: Disconnected")
+        self.tray_status_action.setEnabled(False)
+
+        self.tray_connect_action = tray_menu.addAction("Start Session")
+        self.tray_connect_action.triggered.connect(self._toggle_connection)
+
+        tray_menu.addSeparator()
+
+        act_exit = tray_menu.addAction("Exit DualDesk")
+        act_exit.triggered.connect(self._quit_application)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._on_tray_activated)
+        self.tray_icon.show()
+
+    def _show_from_tray(self) -> None:
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            if self.isVisible():
+                self.hide()
+            else:
+                self._show_from_tray()
+
+    def _quit_application(self) -> None:
+        self._force_quit = True
+        self.close()
+
+    def _on_auto_start_toggled(self, checked: bool) -> None:
+        success = set_auto_start(checked)
+        self.db.set_setting("auto_start_enabled", checked)
+        if not success and checked:
+            QMessageBox.warning(
+                self,
+                "Registry Access",
+                "Could not update Windows startup registry key. Ensure sufficient user permissions.",
+            )
+            self.chk_auto_start.setChecked(False)
+
     def closeEvent(self, event) -> None:
+        if not self._force_quit and hasattr(self, "chk_minimize_to_tray") and self.chk_minimize_to_tray.isChecked():
+            event.ignore()
+            self.hide()
+            self.tray_icon.showMessage(
+                "DualDesk",
+                "DualDesk minimized to system tray. Active sessions remain connected.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
+            return
+
+        self.tray_icon.hide()
         self.discovery.stop()
         self.connection_manager.stop_control_server()
         self.connection_manager.disconnect(reason="App closed")

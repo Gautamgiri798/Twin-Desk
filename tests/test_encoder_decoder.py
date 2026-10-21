@@ -149,3 +149,49 @@ def test_screen_capture_adapter_h264_mode() -> None:
     decoded = decoder.decode_packet(frame_bytes)
     assert decoded is not None
     assert decoded.format == "h264_nal"
+
+
+def test_encoder_diagnostic_summary_and_display_names() -> None:
+    from dualdesk.display.encoder import (
+        EncoderBackend,
+        EncoderCapabilities,
+        get_backend_display_name,
+        get_encoder_diagnostic_summary,
+    )
+
+    assert "NVIDIA NVENC" in get_backend_display_name(EncoderBackend.NVENC)
+    assert "Intel QuickSync" in get_backend_display_name(EncoderBackend.QUICKSYNC)
+    assert "AMD Advanced Media" in get_backend_display_name(EncoderBackend.AMF)
+    assert "Media Foundation" in get_backend_display_name(EncoderBackend.MEDIA_FOUNDATION)
+    assert "Software Fallback" in get_backend_display_name(EncoderBackend.SOFTWARE)
+
+    # Test summary with hardware accelerated caps
+    hw_caps = EncoderCapabilities(
+        available_backends=[EncoderBackend.NVENC, EncoderBackend.SOFTWARE],
+        preferred_backend=EncoderBackend.NVENC,
+        is_hardware_accelerated=True,
+        supported_codecs=[VideoCodec.H264, VideoCodec.HEVC],
+        max_resolution=(3840, 2160),
+        max_fps=120,
+    )
+    hw_summary = get_encoder_diagnostic_summary(hw_caps)
+    assert hw_summary["is_hardware_accelerated"] is True
+    assert hw_summary["status_badge"] == "HARDWARE ACCELERATED"
+    assert "NVIDIA NVENC" in hw_summary["preferred_backend_name"]
+    assert "H.264 High Profile" in hw_summary["profile"]
+    assert "ultra-low latency" in hw_summary["explanation"]
+
+    # Test summary with software fallback caps
+    sw_caps = EncoderCapabilities(
+        available_backends=[EncoderBackend.SOFTWARE],
+        preferred_backend=EncoderBackend.SOFTWARE,
+        is_hardware_accelerated=False,
+        supported_codecs=[VideoCodec.H264, VideoCodec.JPEG],
+        max_resolution=(1920, 1080),
+        max_fps=60,
+    )
+    sw_summary = get_encoder_diagnostic_summary(sw_caps)
+    assert sw_summary["is_hardware_accelerated"] is False
+    assert sw_summary["status_badge"] == "SOFTWARE FALLBACK"
+    assert "Software Fallback" in sw_summary["preferred_backend_name"]
+    assert "CPU baseline" in sw_summary["explanation"]

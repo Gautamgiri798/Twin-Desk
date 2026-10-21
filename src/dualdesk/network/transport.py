@@ -17,12 +17,15 @@ from dualdesk.display.adaptive import AdaptiveRateController
 from dualdesk.display.clipboard import ClipboardAdapter
 from dualdesk.display.driver import get_supported_modes, negotiate_target_mode
 from dualdesk.display.input_injector import InputInjector
+from dualdesk.network.file_transfer import CHUNK_SIZE_BYTES, FileTransferManager
 from dualdesk.protocol.models import (
     AudioFramePayload,
     ButtonPayload,
     ClipboardUpdatePayload,
     DisplayMode,
     ErrorCode,
+    FileTransferChunkPayload,
+    FileTransferRequestPayload,
     GesturePayload,
     KeyPayload,
     MessageEnvelope,
@@ -172,6 +175,34 @@ class ConnectionManager:
         self.telemetry = SessionTelemetry()
         self._history_id: int | None = None
         self._sequence_counter = 0
+        self.escape_shortcut: str = "Ctrl+Alt+Shift+Escape"
+        self.host_input_lockout: bool = False
+
+        # Reconnection Resilience (TASK-11)
+        self.auto_reconnect_enabled: bool = True
+        self.max_reconnect_attempts: int = 3
+        self.reconnect_attempt: int = 0
+        self._is_reconnecting: bool = False
+        self._reconnect_thread: threading.Thread | None = None
+        self.last_connected_peer_id: str | None = None
+        self.last_connected_peer_fingerprint: str | None = None
+        self.last_connected_peer_address: str | None = None
+        self.last_connected_width: int = 1920
+        self.last_connected_height: int = 1080
+
+        # Secure Out-of-Band File Transfer (TASK-12)
+        self.file_transfer_manager = FileTransferManager(
+            consent_callback=self._prompt_file_consent,
+            progress_callback=self._on_file_progress,
+            completion_callback=self._on_file_complete,
+        )
+        self._outgoing_transfers: dict[
+            str, tuple[FileTransferRequestPayload, list[FileTransferChunkPayload]]
+        ] = {}
+        self.on_file_transfer_progress: Callable[[str, int, int], None] | None = None
+        self.on_file_transfer_completed: Callable[[str, bool, Path | None, str], None] | None = None
+        self.on_file_transfer_requested: Callable[[FileTransferRequestPayload], bool] | None = None
+
         self._lock = threading.Lock()
 
         # Network control sockets and threads
@@ -187,6 +218,184 @@ class ConnectionManager:
         self._media_server_thread: threading.Thread | None = None
         self._media_client_sock: socket.socket | None = None
         self._media_receiver_thread: threading.Thread | None = None
+
+    def _prompt_file_consent(self, req: FileTransferRequestPayload) -> bool:
+        if self.on_file_transfer_requested:
+            return self.on_file_transfer_requested(req)
+        return True
+
+    def _on_file_progress(self, transfer_id: str, current_bytes: int, total_bytes: int) -> None:
+        if self.on_file_transfer_progress:
+            self.on_file_transfer_progress(transfer_id, current_bytes, total_bytes)
+
+    def _on_file_complete(self, transfer_id: str, success: bool, path: Path | None, msg: str) -> None:
+        if self.on_file_transfer_completed:
+            self.on_file_transfer_completed(transfer_id, success, path, msg)
+
+    def send_file(self, file_path: Path | str) -> str:
+        """Initiates an authenticated out-of-band file transfer to the connected peer."""
+        sock = self._active_client_sock or self._client_sock
+        if not sock:
+            raise ProtocolError(
+                ErrorCode.NETWORK_UNREACHABLE, "No active connection to transfer file."
+            )
+
+        sender_id = (
+            getattr(self.pairing_manager, "local_fingerprint", "")
+            if self.pairing_manager
+            else ""
+        )
+        req, chunks = self.file_transfer_manager.prepare_outgoing_file(
+            file_path, sender_device_id=sender_id
+        )
+        self._outgoing_transfers[req.transfer_id] = (req, chunks)
+
+        self._sequence_counter += 1
+        env = MessageEnvelope(
+            type=MessageType.FILE_TRANSFER_REQUEST.value,
+            session_id=self.active_session_id or "",
+            sequence=self._sequence_counter,
+            payload=asdict(req),
+        )
+        _send_envelope(sock, env)
+        return req.transfer_id
+
+    def _handle_file_transfer_accepted(
+        self, payload: dict[str, Any], sock: socket.socket
+    ) -> None:
+        transfer_id = str(payload.get("transfer_id", ""))
+        accepted = bool(payload.get("accepted", False))
+        if not accepted:
+            reason = str(payload.get("reason", "Declined by peer"))
+            self._outgoing_transfers.pop(transfer_id, None)
+            if self.on_file_transfer_completed:
+                self.on_file_transfer_completed(transfer_id, False, None, reason)
+            return
+
+        outgoing = self._outgoing_transfers.get(transfer_id)
+        if not outgoing:
+            return
+
+        req, chunks = outgoing
+
+        def _send_chunks() -> None:
+            try:
+                for chunk in chunks:
+                    self._sequence_counter += 1
+                    env = MessageEnvelope(
+                        type=MessageType.FILE_TRANSFER_CHUNK.value,
+                        session_id=self.active_session_id or "",
+                        sequence=self._sequence_counter,
+                        payload=asdict(chunk),
+                    )
+                    _send_envelope(sock, env)
+                    if self.on_file_transfer_progress:
+                        bytes_sent = (chunk.chunk_index + 1) * CHUNK_SIZE_BYTES
+                        self.on_file_transfer_progress(
+                            transfer_id,
+                            min(req.file_size_bytes, bytes_sent),
+                            req.file_size_bytes,
+                        )
+
+                self._sequence_counter += 1
+                comp_env = MessageEnvelope(
+                    type=MessageType.FILE_TRANSFER_COMPLETE.value,
+                    session_id=self.active_session_id or "",
+                    sequence=self._sequence_counter,
+                    payload={
+                        "transfer_id": transfer_id,
+                        "status": "success",
+                        "final_sha256": req.file_sha256,
+                    },
+                )
+                _send_envelope(sock, comp_env)
+                self._outgoing_transfers.pop(transfer_id, None)
+                if self.on_file_transfer_completed:
+                    self.on_file_transfer_completed(
+                        transfer_id, True, Path(req.file_name), "Sent successfully"
+                    )
+            except OSError as e:
+                self._outgoing_transfers.pop(transfer_id, None)
+                if self.on_file_transfer_completed:
+                    self.on_file_transfer_completed(
+                        transfer_id, False, None, f"Transfer socket error: {e}"
+                    )
+
+        t = threading.Thread(target=_send_chunks, daemon=True, name="FileTransferSender")
+        t.start()
+
+    def _dispatch_file_transfer_message(
+        self, env: MessageEnvelope, sock: socket.socket
+    ) -> bool:
+        msg_type = env.type
+        if msg_type == MessageType.FILE_TRANSFER_REQUEST.value:
+            req_payload = FileTransferRequestPayload(
+                transfer_id=str(env.payload.get("transfer_id", "")),
+                file_name=str(env.payload.get("file_name", "")),
+                file_size_bytes=int(env.payload.get("file_size_bytes", 0)),
+                file_sha256=str(env.payload.get("file_sha256", "")),
+                sender_device_id=str(env.payload.get("sender_device_id", "")),
+            )
+            accept_payload = self.file_transfer_manager.handle_transfer_request(req_payload)
+            self._sequence_counter += 1
+            reply_type = (
+                MessageType.FILE_TRANSFER_ACCEPT.value
+                if accept_payload.accepted
+                else MessageType.FILE_TRANSFER_REJECT.value
+            )
+            reply_env = MessageEnvelope(
+                type=reply_type,
+                session_id=self.active_session_id or "",
+                sequence=self._sequence_counter,
+                payload=asdict(accept_payload),
+            )
+            _send_envelope(sock, reply_env)
+            return True
+
+        elif msg_type == MessageType.FILE_TRANSFER_ACCEPT.value:
+            self._handle_file_transfer_accepted(env.payload, sock)
+            return True
+
+        elif msg_type == MessageType.FILE_TRANSFER_REJECT.value:
+            tid = str(env.payload.get("transfer_id", ""))
+            reason = str(env.payload.get("reason", "Declined by peer"))
+            self._outgoing_transfers.pop(tid, None)
+            if self.on_file_transfer_completed:
+                self.on_file_transfer_completed(tid, False, None, reason)
+            return True
+
+        elif msg_type == MessageType.FILE_TRANSFER_CHUNK.value:
+            chunk_payload = FileTransferChunkPayload(
+                transfer_id=str(env.payload.get("transfer_id", "")),
+                chunk_index=int(env.payload.get("chunk_index", 0)),
+                total_chunks=int(env.payload.get("total_chunks", 0)),
+                data_b64=str(env.payload.get("data_b64", "")),
+                chunk_sha256=str(env.payload.get("chunk_sha256", "")),
+            )
+            self.file_transfer_manager.handle_chunk(chunk_payload)
+            return True
+
+        elif msg_type == MessageType.FILE_TRANSFER_COMPLETE.value:
+            tid = str(env.payload.get("transfer_id", ""))
+            self.file_transfer_manager.finalize_transfer(tid)
+            return True
+
+        elif msg_type == MessageType.FILE_TRANSFER_CANCEL.value:
+            tid = str(env.payload.get("transfer_id", ""))
+            self.file_transfer_manager.cancel_transfer(tid)
+            return True
+
+        return False
+
+    def set_escape_shortcut(self, shortcut: str) -> None:
+        self.escape_shortcut = shortcut
+        if self.input_filter:
+            self.input_filter.configure_escape_shortcut(shortcut)
+
+    def set_host_input_lockout(self, enabled: bool) -> None:
+        self.host_input_lockout = enabled
+        if self.input_filter:
+            self.input_filter.set_host_input_lockout(enabled)
 
     def set_state(self, state: ConnectionState, detail: str = "") -> None:
         self.state = state
@@ -329,6 +538,9 @@ class ConnectionManager:
     def _dispatch_server_message(
         self, env: MessageEnvelope, sock: socket.socket, addr: tuple[str, int]
     ) -> None:
+        if self._dispatch_file_transfer_message(env, sock):
+            return
+
         msg_type = env.type
 
         if msg_type == MessageType.PAIRING_REQUEST.value:
@@ -861,7 +1073,9 @@ class ConnectionManager:
                         continue
                     try:
                         env = MessageEnvelope.deserialize(line)
-                        if env.type == MessageType.SESSION_STOP.value:
+                        if self._dispatch_file_transfer_message(env, self._client_sock):
+                            continue
+                        elif env.type == MessageType.SESSION_STOP.value:
                             self.disconnect(reason="Host disconnected")
                             return
                         elif env.type == MessageType.AUDIO_FRAME.value:
@@ -1054,12 +1268,22 @@ class ConnectionManager:
                 session_id=session_id,
                 display_width=display_width,
                 display_height=display_height,
+                escape_shortcut=self.escape_shortcut,
+                host_input_lockout=self.host_input_lockout,
             )
             if self.input_injector:
                 self.input_injector.update_bounds(display_width, display_height)
 
             self._sequence_counter = 0
             self._history_id = self.db.record_connection_start(peer_device_id)
+
+            self.last_connected_peer_id = peer_device_id
+            self.last_connected_peer_fingerprint = peer_fingerprint
+            self.last_connected_peer_address = peer_address
+            self.last_connected_width = display_width
+            self.last_connected_height = display_height
+            self.reconnect_attempt = 0
+            self._is_reconnecting = False
 
             self.set_state(ConnectionState.STREAMING, "Session active")
             self.db.log_diagnostic_event(
@@ -1071,56 +1295,42 @@ class ConnectionManager:
             )
             return True
 
-    def disconnect(self, reason: str = "User disconnect") -> None:
+    def _cleanup_sockets(self) -> None:
+        """Closes active network sockets and releases held inputs without clearing session state."""
+        if self._client_sock:
+            try:
+                self._client_sock.close()
+            except OSError:
+                pass
+            self._client_sock = None
+
+        if self._active_client_sock:
+            try:
+                self._active_client_sock.close()
+            except OSError:
+                pass
+            self._active_client_sock = None
+
+        if self._media_client_sock:
+            try:
+                self._media_client_sock.close()
+            except OSError:
+                pass
+            self._media_client_sock = None
+
+        if self.input_filter:
+            release_info = self.input_filter.release_all()
+            if self.input_injector:
+                self.input_injector.release_all(
+                    keys=release_info.get("released_keys"),
+                    buttons=release_info.get("released_buttons"),
+                )
+
+    def _teardown_session(self, reason: str = "User disconnect") -> None:
+        """Finalizes session termination, records connection end, and marks disconnected."""
         with self._lock:
-            if self._client_sock:
-                try:
-                    stop_env = MessageEnvelope(
-                        type=MessageType.SESSION_STOP.value,
-                        session_id=self.active_session_id or "",
-                        payload={"reason": reason},
-                    )
-                    _send_envelope(self._client_sock, stop_env)
-                    self._client_sock.close()
-                except OSError:
-                    pass
-                self._client_sock = None
-
-            if self._active_client_sock:
-                try:
-                    stop_env = MessageEnvelope(
-                        type=MessageType.SESSION_STOP.value,
-                        session_id=self.active_session_id or "",
-                        payload={"reason": reason},
-                    )
-                    _send_envelope(self._active_client_sock, stop_env)
-                    self._active_client_sock.close()
-                except OSError:
-                    pass
-                self._active_client_sock = None
-
-            if self._media_client_sock:
-                try:
-                    self._media_client_sock.close()
-                except OSError:
-                    pass
-                self._media_client_sock = None
-
+            self._cleanup_sockets()
             if self.input_filter:
-                release_info = self.input_filter.release_all()
-                if self.input_injector:
-                    self.input_injector.release_all(
-                        keys=release_info.get("released_keys"),
-                        buttons=release_info.get("released_buttons"),
-                    )
-
-                if release_info["released_keys"] or release_info["released_buttons"]:
-                    self.db.log_diagnostic_event(
-                        level="INFO",
-                        component="input",
-                        event_code="INPUT_RELEASE_ALL",
-                        message_redacted="Released all held keys and mouse buttons upon session disconnect",
-                    )
                 self.input_filter = None
 
             if self._history_id:
@@ -1137,6 +1347,109 @@ class ConnectionManager:
             self.peer_device_id = None
             self.peer_fingerprint = None
             self.set_state(ConnectionState.DISCONNECTED, reason)
+
+    def disconnect(self, reason: str = "User disconnect") -> None:
+        """Disconnects current session or initiates automatic recovery if interrupted."""
+        with self._lock:
+            is_clean_exit = reason in (
+                "User disconnect",
+                "App closed",
+                "Emergency escape shortcut triggered",
+                "User cancelled reconnection",
+                "Client disconnected",
+                "Remote peer disconnected",
+                "Remote peer closed connection",
+            )
+            # Only the client initiates auto-reconnection upon unexpected socket drops
+            if (
+                self.role == "client"
+                and not is_clean_exit
+                and self.auto_reconnect_enabled
+                and not self._is_reconnecting
+                and self.last_connected_peer_address
+            ):
+                self._start_auto_reconnect(reason)
+                return
+
+            self._is_reconnecting = False
+
+            if self._client_sock:
+                try:
+                    stop_env = MessageEnvelope(
+                        type=MessageType.SESSION_STOP.value,
+                        session_id=self.active_session_id or "",
+                        payload={"reason": reason},
+                    )
+                    _send_envelope(self._client_sock, stop_env)
+                except OSError:
+                    pass
+
+            if self._active_client_sock:
+                try:
+                    stop_env = MessageEnvelope(
+                        type=MessageType.SESSION_STOP.value,
+                        session_id=self.active_session_id or "",
+                        payload={"reason": reason},
+                    )
+                    _send_envelope(self._active_client_sock, stop_env)
+                except OSError:
+                    pass
+
+        self._teardown_session(reason)
+
+    def _start_auto_reconnect(self, trigger_reason: str) -> None:
+        self._is_reconnecting = True
+        self._cleanup_sockets()
+        self._reconnect_thread = threading.Thread(
+            target=self._auto_reconnect_worker,
+            args=(trigger_reason,),
+            daemon=True,
+            name="AutoReconnectWorker",
+        )
+        self._reconnect_thread.start()
+
+    def _auto_reconnect_worker(self, trigger_reason: str) -> None:
+        backoff_delays = [1.0, 2.0, 4.0]
+        while self._is_reconnecting and self.reconnect_attempt < self.max_reconnect_attempts:
+            self.reconnect_attempt += 1
+            delay = backoff_delays[min(self.reconnect_attempt - 1, len(backoff_delays) - 1)]
+            self.set_state(
+                ConnectionState.RECOVERING,
+                f"Connection dropped ({trigger_reason}). Retrying in {delay:.0f}s (Attempt {self.reconnect_attempt}/{self.max_reconnect_attempts})...",
+            )
+            time.sleep(delay)
+            if not self._is_reconnecting:
+                break
+
+            if (
+                self.last_connected_peer_id
+                and self.last_connected_peer_fingerprint
+                and self.last_connected_peer_address
+            ):
+                try:
+                    ok = self.connect(
+                        peer_device_id=self.last_connected_peer_id,
+                        peer_fingerprint=self.last_connected_peer_fingerprint,
+                        peer_address=self.last_connected_peer_address,
+                        display_width=self.last_connected_width,
+                        display_height=self.last_connected_height,
+                    )
+                    if ok:
+                        self._is_reconnecting = False
+                        return
+                except (OSError, ProtocolError):
+                    continue
+
+        if self._is_reconnecting:
+            self._is_reconnecting = False
+            self._teardown_session(
+                reason=f"Reconnection failed after {self.max_reconnect_attempts} attempts."
+            )
+
+    def cancel_reconnect(self) -> None:
+        """Cancels background reconnection attempts and disconnects."""
+        self._is_reconnecting = False
+        self._teardown_session(reason="User cancelled reconnection")
 
     def handle_incoming_pointer(
         self, payload: PointerPayload, sequence: int
@@ -1254,3 +1567,16 @@ class ConnectionManager:
         self.telemetry.codec = codec
         if self.on_telemetry_updated:
             self.on_telemetry_updated(self.telemetry)
+
+    def set_audio_muted(self, muted: bool) -> None:
+        """Toggles audio mute state across local capture adapter and playback jitter buffer."""
+        if self.audio_capture:
+            self.audio_capture.set_muted(muted)
+        if self.audio_player:
+            self.audio_player.set_muted(muted)
+
+    def set_audio_volume(self, volume: float) -> None:
+        """Sets playback volume scaling factor (0.0 to 1.5)."""
+        if self.audio_player:
+            self.audio_player.set_volume(volume)
+

@@ -14,6 +14,14 @@ from dualdesk.protocol.models import (
     TouchPoint,
 )
 
+AVAILABLE_ESCAPE_SHORTCUTS: list[str] = [
+    "Ctrl+Alt+Shift+Escape",
+    "Ctrl+Alt+Escape",
+    "Ctrl+Shift+Escape",
+    "Alt+Shift+Escape",
+    "F12+Escape",
+]
+
 
 class InputSecurityError(Exception):
     pass
@@ -39,6 +47,8 @@ class InputFilter:
         session_id: str,
         display_width: int = 1920,
         display_height: int = 1080,
+        escape_shortcut: str = "Ctrl+Alt+Shift+Escape",
+        host_input_lockout: bool = False,
     ) -> None:
         self.session_id = session_id
         self.display_width = display_width
@@ -50,6 +60,26 @@ class InputFilter:
         self._rate_window_start = time.time()
         self._rate_count = 0
         self.emergency_escape_triggered = False
+        self.escape_shortcut = (
+            escape_shortcut if escape_shortcut in AVAILABLE_ESCAPE_SHORTCUTS else "Ctrl+Alt+Shift+Escape"
+        )
+        self.host_input_lockout = host_input_lockout
+
+    def configure_escape_shortcut(self, shortcut: str) -> None:
+        if shortcut in AVAILABLE_ESCAPE_SHORTCUTS:
+            self.escape_shortcut = shortcut
+
+    def set_host_input_lockout(self, enabled: bool) -> None:
+        self.host_input_lockout = enabled
+
+    def is_escape_sequence(self, key_code: int, key_name: str = "") -> bool:
+        if self.escape_shortcut == "F12+Escape":
+            return (key_code == 27 and 123 in self._held_keys) or (
+                key_code == 123 and 27 in self._held_keys
+            )
+        # For standard combinations (Ctrl+Alt+Escape, Ctrl+Alt+Shift+Escape, etc.):
+        # Trigger when Escape is pressed while at least 2 modifier keys are held down
+        return key_code == 27 and len(self._held_keys) >= 2
 
     def update_bounds(self, width: int, height: int) -> None:
         self.display_width = max(1, width)
@@ -114,9 +144,10 @@ class InputFilter:
         self._check_rate_limit()
         self.validate_sequence(sequence)
 
-        # Check for emergency escape sequence (e.g. key code 27 for Escape when Ctrl+Alt+Shift held)
-        if payload.key_code == 27 and len(self._held_keys) >= 2:
+        # Check for emergency escape sequence
+        if self.is_escape_sequence(payload.key_code, payload.key_name):
             self.emergency_escape_triggered = True
+            self.host_input_lockout = False
             self.release_all()
             return payload.key_code, payload.key_name, False
 

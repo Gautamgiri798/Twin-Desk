@@ -335,3 +335,148 @@ def test_dualdesk_ui_telemetry_history_and_performance_graphs(qapp):
         window.close()
 
 
+def test_driver_prerequisites_check():
+    from dualdesk.display.driver import check_driver_prerequisites
+
+    prereqs = check_driver_prerequisites()
+    assert isinstance(prereqs.is_admin, bool)
+    assert isinstance(prereqs.is_testsigning_enabled, bool)
+    assert isinstance(prereqs.has_windows_sdk, bool)
+    assert isinstance(prereqs.has_vs, bool)
+    assert isinstance(prereqs.has_wdk, bool)
+    assert isinstance(prereqs.status_summary, str)
+    assert prereqs.can_dry_run is True
+
+
+def test_driver_install_wizard_dialog(qapp):
+    from dualdesk.ui.components import DriverInstallWizardDialog
+
+    dialog = DriverInstallWizardDialog()
+    assert dialog.windowTitle() == "Virtual Display Driver Installation Wizard"
+
+    # Verify prerequisite labels exist
+    assert "User Elevation" in dialog.lbl_admin.text()
+    assert "Test-Signing" in dialog.lbl_testsigning.text()
+    assert "Build Tools" in dialog.lbl_sdk.text()
+
+    # Verify install button disabled until consent checked
+    assert dialog.btn_install.isEnabled() is False
+
+    dialog.chk_confirm.setChecked(True)
+    assert dialog.btn_install.isEnabled() is True
+
+    dialog.chk_confirm.setChecked(False)
+    assert dialog.btn_install.isEnabled() is False
+
+    # Dry-run button triggers output
+    dialog._on_run_dry_run()
+    assert len(dialog.txt_console.toPlainText()) > 0
+
+    dialog.close()
+
+
+def test_dualdesk_ui_driver_wizard_button(qapp):
+    window = DualDeskApp()
+    try:
+        assert hasattr(window, "btn_driver_wizard")
+        assert window.btn_driver_wizard.text() == "Open Driver Installation Wizard"
+    finally:
+        window.close()
+
+
+def test_dualdesk_ui_encoder_diagnostics_card(qapp):
+    window = DualDeskApp()
+    try:
+        assert hasattr(window, "lbl_encoder_badge")
+        assert hasattr(window, "lbl_encoder_backend")
+        assert hasattr(window, "lbl_encoder_profile")
+        assert hasattr(window, "lbl_encoder_explanation")
+
+        badge_text = window.lbl_encoder_badge.text()
+        assert badge_text in ("HARDWARE ACCELERATED", "SOFTWARE FALLBACK")
+
+        backend_text = window.lbl_encoder_backend.text()
+        assert "Active Backend:" in backend_text
+
+        profile_text = window.lbl_encoder_profile.text()
+        assert "Profile:" in profile_text
+        assert "Max:" in profile_text
+
+        assert len(window.lbl_encoder_explanation.text()) > 0
+
+        # Verify manual refresh
+        window._refresh_encoder_diagnostics()
+        assert window.lbl_encoder_badge.text() == badge_text
+    finally:
+        window.close()
+
+
+def test_monitor_arrangement_canvas_and_card(qapp):
+    from PySide6.QtGui import QPixmap
+
+    from dualdesk.ui.components import DisplayArrangementCard, MonitorArrangementCanvas
+
+    canvas = MonitorArrangementCanvas()
+    canvas.resize(450, 200)
+    assert canvas.placement == "right"
+
+    canvas.set_placement("left")
+    assert canvas.placement == "left"
+
+    canvas.set_placement("above")
+    assert canvas.placement == "above"
+
+    canvas.set_placement("below")
+    assert canvas.placement == "below"
+
+    # Offscreen paint test
+    pix = QPixmap(450, 200)
+    canvas.render(pix)
+    assert not pix.isNull()
+
+    # Card integration
+    card = DisplayArrangementCard(initial_placement="left")
+    assert card.get_placement() == "left"
+    assert "LEFT" in card.lbl_offset.text()
+
+    # Click button to change
+    card.buttons["right"].click()
+    assert card.get_placement() == "right"
+    assert "RIGHT" in card.lbl_offset.text()
+
+
+def test_dualdesk_ui_arrangement_card_integration(qapp):
+    window = DualDeskApp()
+    try:
+        assert hasattr(window, "arrangement_card")
+        assert window.arrangement_card.get_placement() in ("left", "right", "above", "below")
+
+        window._on_display_placement_changed("above")
+        assert window.display_placement == "above"
+        assert window.db.get_setting("secondary_display_placement") == "above"
+    finally:
+        window.close()
+
+
+def test_dualdesk_ui_escape_shortcut_and_lockout_settings(qapp):
+    window = DualDeskApp()
+    try:
+        assert hasattr(window, "combo_escape")
+        assert hasattr(window, "chk_host_lockout")
+
+        # Change shortcut
+        window._on_escape_shortcut_changed("Ctrl+Alt+Escape")
+        assert window.escape_shortcut == "Ctrl+Alt+Escape"
+        assert window.db.get_setting("escape_shortcut") == "Ctrl+Alt+Escape"
+        assert window.connection_manager.escape_shortcut == "Ctrl+Alt+Escape"
+
+        # Toggle lockout
+        window._on_host_lockout_toggled(True)
+        assert window.host_input_lockout is True
+        assert window.db.get_setting("host_input_lockout") is True
+        assert window.connection_manager.host_input_lockout is True
+    finally:
+        window.close()
+
+
+

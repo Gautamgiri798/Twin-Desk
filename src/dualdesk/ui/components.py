@@ -3,23 +3,28 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QIcon,
     QPainter,
     QPainterPath,
     QPaintEvent,
     QPen,
+    QPixmap,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -497,4 +502,397 @@ class FramerateGraphCard(QFrame):
         self.stats_label.setText(
             f"Current: {cur_fps:.1f} FPS | Bitrate: {cur_bitrate:.2f} Mbps | Drops: {drops}"
         )
+
+
+class DriverInstallWizardDialog(QDialog):
+    """
+    Interactive wizard guiding users safely through native IDD virtual display driver
+    prerequisites verification, dry-run toolchain validation, security disclosures, and installation.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        from dualdesk.display.driver import check_driver_prerequisites
+
+        self.setWindowTitle("Virtual Display Driver Installation Wizard")
+        self.resize(580, 520)
+        self.setMinimumSize(520, 460)
+
+        self.prereqs = check_driver_prerequisites()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        # Header
+        title = QLabel("Virtual Display Driver Installation Wizard")
+        title.setStyleSheet("font-size: 18px; font-weight: 700; color: #f8fafc;")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "True OS-level desktop extension requires the native Windows Indirect Display Driver (IddCx). "
+            "This wizard validates prerequisites and guides local compilation and test-signing."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #94a3b8; font-size: 12px; line-height: 1.4;")
+        layout.addWidget(desc)
+
+        # Prerequisites Section
+        prereq_box = QFrame()
+        prereq_box.setStyleSheet(
+            "background-color: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;"
+        )
+        p_layout = QVBoxLayout(prereq_box)
+        p_layout.setSpacing(6)
+
+        p_header = QLabel("SYSTEM PREREQUISITES")
+        p_header.setStyleSheet(
+            "font-size: 11px; font-weight: 700; color: #38bdf8; letter-spacing: 0.5px;"
+        )
+        p_layout.addWidget(p_header)
+
+        admin_color = "#10b981" if self.prereqs.is_admin else "#f59e0b"
+        admin_text = (
+            "Elevated (Administrator)"
+            if self.prereqs.is_admin
+            else "Standard User (Run DualDesk as Administrator to install)"
+        )
+        self.lbl_admin = QLabel(
+            f"• User Elevation: <font color='{admin_color}'><b>{admin_text}</b></font>"
+        )
+        p_layout.addWidget(self.lbl_admin)
+
+        test_color = "#10b981" if self.prereqs.is_testsigning_enabled else "#f59e0b"
+        test_text = (
+            "Enabled"
+            if self.prereqs.is_testsigning_enabled
+            else "Disabled (Run: bcdedit /set testsigning on)"
+        )
+        self.lbl_testsigning = QLabel(
+            f"• Windows Test-Signing: <font color='{test_color}'><b>{test_text}</b></font>"
+        )
+        p_layout.addWidget(self.lbl_testsigning)
+
+        sdk_color = "#10b981" if (self.prereqs.has_windows_sdk or self.prereqs.has_vs) else "#94a3b8"
+        sdk_text = (
+            "Detected"
+            if (self.prereqs.has_windows_sdk or self.prereqs.has_vs)
+            else "Not detected (using PATH/CMake)"
+        )
+        self.lbl_sdk = QLabel(
+            f"• Build Tools (VS / SDK): <font color='{sdk_color}'><b>{sdk_text}</b></font>"
+        )
+        p_layout.addWidget(self.lbl_sdk)
+
+        layout.addWidget(prereq_box)
+
+        # Dry Run Validation Section
+        btn_row = QHBoxLayout()
+        self.btn_dry_run = QPushButton("Run Dry-Run Toolchain Validation")
+        self.btn_dry_run.setProperty("class", "SecondaryButton")
+        self.btn_dry_run.clicked.connect(self._on_run_dry_run)
+        btn_row.addWidget(self.btn_dry_run)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        self.txt_console = QTextEdit()
+        self.txt_console.setReadOnly(True)
+        self.txt_console.setMaximumHeight(110)
+        self.txt_console.setPlaceholderText(
+            "Click 'Run Dry-Run Toolchain Validation' to safely inspect compiler paths and certificates..."
+        )
+        self.txt_console.setStyleSheet(
+            "font-family: Consolas, monospace; font-size: 11px; background-color: #020617; "
+            "color: #94a3b8; border: 1px solid #1e293b; border-radius: 6px;"
+        )
+        layout.addWidget(self.txt_console)
+
+        # Warning / Disclosure Box
+        notice = NoticeBanner(
+            "Security Notice: Installing test-signed drivers requires enabling Windows Test-Signing mode. "
+            "To uninstall the virtual display driver at any time, run: devcon.exe remove Root\\DualDeskIddDriver "
+            "or remove 'DualDesk Virtual Display Adapter' in Device Manager."
+        )
+        layout.addWidget(notice)
+
+        # Consent Checkbox
+        self.chk_confirm = QCheckBox(
+            "I understand test-signing mode implications and confirm running driver installation."
+        )
+        self.chk_confirm.stateChanged.connect(self._on_confirm_toggled)
+        layout.addWidget(self.chk_confirm)
+
+        # Dialog Buttons
+        self.button_box = QDialogButtonBox()
+        self.btn_install = self.button_box.addButton(
+            "Proceed with Installation", QDialogButtonBox.ButtonRole.AcceptRole
+        )
+        self.btn_install.setEnabled(False)
+        self.btn_cancel = self.button_box.addButton(
+            "Cancel / Close", QDialogButtonBox.ButtonRole.RejectRole
+        )
+
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+    def _on_confirm_toggled(self) -> None:
+        self.btn_install.setEnabled(self.chk_confirm.isChecked())
+
+    def _on_run_dry_run(self) -> None:
+        from dualdesk.display.driver import run_driver_dry_run
+
+        self.txt_console.setPlainText("Running scripts/build_driver.ps1 -DryRun ...\n")
+        _ok, output = run_driver_dry_run()
+        self.txt_console.setPlainText(output)
+
+
+class MonitorArrangementCanvas(QWidget):
+    """
+    Interactive visual display arrangement canvas.
+    Renders primary monitor and draggable virtual monitor to configure
+    spatial orientation (Left, Right, Above, Below) and crossover boundaries.
+    """
+
+    placement_changed = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setMinimumSize(440, 200)
+        self._placement: str = "right"
+        self._primary_label: str = "1: Primary (1920x1080)"
+        self._virtual_label: str = "2: Virtual Display"
+        self._dragging: bool = False
+        self._drag_offset: QPointF = QPointF(0, 0)
+        self._virtual_rect: QRectF = QRectF(0, 0, 0, 0)
+        self.setMouseTracking(True)
+
+    @property
+    def placement(self) -> str:
+        return self._placement
+
+    def set_placement(self, placement: str) -> None:
+        p = placement.lower()
+        if p in ("right", "left", "above", "below") and p != self._placement:
+            self._placement = p
+            self.update()
+            self.placement_changed.emit(self._placement)
+
+    def set_resolutions(self, primary_res: str, virtual_res: str) -> None:
+        self._primary_label = f"1: Primary ({primary_res})"
+        self._virtual_label = f"2: Virtual ({virtual_res})"
+        self.update()
+
+    def _calculate_monitor_rects(self) -> tuple[QRectF, QRectF]:
+        w = float(self.width())
+        h = float(self.height())
+        center_x = w / 2.0
+        center_y = h / 2.0
+
+        m1_w = 140.0
+        m1_h = 80.0
+        m2_w = 140.0
+        m2_h = 80.0
+        gap = 12.0
+
+        if self._placement == "right":
+            total_w = m1_w + gap + m2_w
+            start_x = center_x - (total_w / 2.0)
+            m1_rect = QRectF(start_x, center_y - (m1_h / 2.0), m1_w, m1_h)
+            m2_rect = QRectF(start_x + m1_w + gap, center_y - (m2_h / 2.0), m2_w, m2_h)
+        elif self._placement == "left":
+            total_w = m1_w + gap + m2_w
+            start_x = center_x - (total_w / 2.0)
+            m2_rect = QRectF(start_x, center_y - (m2_h / 2.0), m2_w, m2_h)
+            m1_rect = QRectF(start_x + m2_w + gap, center_y - (m1_h / 2.0), m1_w, m1_h)
+        elif self._placement == "above":
+            total_h = m1_h + gap + m2_h
+            start_y = center_y - (total_h / 2.0)
+            m2_rect = QRectF(center_x - (m2_w / 2.0), start_y, m2_w, m2_h)
+            m1_rect = QRectF(center_x - (m1_w / 2.0), start_y + m2_h + gap, m1_w, m1_h)
+        else:  # below
+            total_h = m1_h + gap + m2_h
+            start_y = center_y - (total_h / 2.0)
+            m1_rect = QRectF(center_x - (m1_w / 2.0), start_y, m1_w, m1_h)
+            m2_rect = QRectF(center_x - (m2_w / 2.0), start_y + m1_h + gap, m2_w, m2_h)
+
+        return m1_rect, m2_rect
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Background canvas frame
+        bg_rect = QRectF(2, 2, self.width() - 4, self.height() - 4)
+        painter.setBrush(QBrush(QColor("#020617")))
+        painter.setPen(QPen(QColor("#1e293b"), 1.5))
+        painter.drawRoundedRect(bg_rect, 8.0, 8.0)
+
+        m1_rect, m2_rect = self._calculate_monitor_rects()
+        self._virtual_rect = m2_rect
+
+        # Draw Primary Display (Screen 1)
+        painter.setBrush(QBrush(QColor("#0f172a")))
+        painter.setPen(QPen(QColor("#38bdf8"), 2.0))
+        painter.drawRoundedRect(m1_rect, 6.0, 6.0)
+
+        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        painter.setPen(QColor("#38bdf8"))
+        painter.drawText(m1_rect, Qt.AlignmentFlag.AlignCenter, self._primary_label)
+
+        # Draw Virtual Display (Screen 2)
+        v_border = QColor("#10b981") if not self._dragging else QColor("#34d399")
+        v_bg = QColor("#064e3b") if not self._dragging else QColor("#065f46")
+        painter.setBrush(QBrush(v_bg))
+        painter.setPen(QPen(v_border, 2.0))
+        painter.drawRoundedRect(m2_rect, 6.0, 6.0)
+
+        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        painter.setPen(QColor("#10b981"))
+        painter.drawText(m2_rect, Qt.AlignmentFlag.AlignCenter, self._virtual_label)
+
+        # Orientation hint footer
+        hint_rect = QRectF(0, self.height() - 24, self.width(), 20)
+        painter.setFont(QFont("Segoe UI", 8))
+        painter.setPen(QColor("#64748b"))
+        painter.drawText(
+            hint_rect,
+            Qt.AlignmentFlag.AlignCenter,
+            f"Orientation: Virtual Display positioned {self._placement.upper()} of Main Display (Click/Drag to adjust)",
+        )
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._virtual_rect.contains(event.position()):
+            self._dragging = True
+            self.update()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._dragging:
+            cx = self.width() / 2.0
+            cy = self.height() / 2.0
+            px = event.position().x()
+            py = event.position().y()
+            dx = px - cx
+            dy = py - cy
+
+            if abs(dx) > abs(dy):
+                new_placement = "right" if dx > 0 else "left"
+            else:
+                new_placement = "below" if dy > 0 else "above"
+
+            if new_placement != self._placement:
+                self.set_placement(new_placement)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._dragging:
+            self._dragging = False
+            self.update()
+
+
+class DisplayArrangementCard(QFrame):
+    """
+    Card containing interactive monitor arrangement canvas and quick placement buttons.
+    """
+
+    placement_changed = Signal(str)
+
+    def __init__(self, initial_placement: str = "right", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setProperty("class", "Card")
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        header_row = QHBoxLayout()
+        title = QLabel("Virtual Display Arrangement Map")
+        title.setStyleSheet("font-size: 15px; font-weight: 700; color: #38bdf8;")
+        header_row.addWidget(title)
+        header_row.addStretch(1)
+
+        self.lbl_offset = QLabel(f"Orientation: {initial_placement.upper()}")
+        self.lbl_offset.setStyleSheet("font-size: 12px; font-weight: 600; color: #10b981;")
+        header_row.addWidget(self.lbl_offset)
+        layout.addLayout(header_row)
+
+        desc = QLabel(
+            "Position the virtual secondary display relative to your host desktop. "
+            "Your mouse pointer seamlessly crosses over at the configured boundary edge."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        layout.addWidget(desc)
+
+        # Canvas
+        self.canvas = MonitorArrangementCanvas(self)
+        self.canvas.set_placement(initial_placement)
+        self.canvas.placement_changed.connect(self._on_canvas_placement_changed)
+        layout.addWidget(self.canvas)
+
+        # Quick selector buttons
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        self.buttons: dict[str, QPushButton] = {}
+        for pos in ["Left", "Right", "Above", "Below"]:
+            pos_key = pos.lower()
+            btn = QPushButton(f"Extend {pos}")
+            btn.setProperty("class", "SecondaryButton")
+            btn.clicked.connect(self._create_placement_handler(pos_key))
+            btn_row.addWidget(btn)
+            self.buttons[pos_key] = btn
+
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+    def _create_placement_handler(self, placement: str):
+        return lambda: self.canvas.set_placement(placement)
+
+    def _on_canvas_placement_changed(self, placement: str) -> None:
+        self.lbl_offset.setText(f"Orientation: {placement.upper()}")
+        self.placement_changed.emit(placement)
+
+    def set_placement(self, placement: str) -> None:
+        self.canvas.set_placement(placement)
+        self.lbl_offset.setText(f"Orientation: {placement.upper()}")
+
+    def get_placement(self) -> str:
+        return self.canvas.placement
+
+
+def create_tray_icon(status: str = "inactive") -> QIcon:
+    """
+    Creates a resolution-independent QIcon with connection status indicator badge.
+    Status can be 'streaming' (green), 'connecting' (amber), or 'inactive' (gray).
+    """
+    pix = QPixmap(32, 32)
+    pix.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    # Monitor outline background
+    painter.setBrush(QBrush(QColor("#0f172a")))
+    painter.setPen(QPen(QColor("#38bdf8"), 1.8))
+    painter.drawRoundedRect(QRectF(3, 4, 26, 18), 3.0, 3.0)
+
+    # Stand base
+    painter.setPen(QPen(QColor("#38bdf8"), 1.5))
+    painter.drawLine(16, 22, 16, 26)
+    painter.drawLine(10, 26, 22, 26)
+
+    # Status LED dot in bottom right
+    status_lower = status.lower()
+    if status_lower in ("streaming", "active"):
+        dot_color = QColor("#10b981")
+    elif status_lower in ("connecting", "pairing"):
+        dot_color = QColor("#f59e0b")
+    else:
+        dot_color = QColor("#64748b")
+
+    painter.setBrush(QBrush(dot_color))
+    painter.setPen(QPen(QColor("#020617"), 1.0))
+    painter.drawEllipse(QRectF(20, 16, 8, 8))
+    painter.end()
+
+    return QIcon(pix)
+
+
 
