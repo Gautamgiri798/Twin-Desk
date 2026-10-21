@@ -42,33 +42,9 @@ Once installed on both machines, connecting whenever you want to work takes less
 <p align="center">
   <img src="docs/images/quickstart.svg" alt="Twin Desk Quick Start Connection Sequence" width="100%" />
 </p>
-
-<details>
-<summary><b>View Raw Diagram Specification (Mermaid &amp; D2)</b></summary>
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as User
-    participant Host as Primary PC (Host)
-    participant LAN as Local Wi-Fi / LAN
-    participant Client as Second Laptop (Client)
-
-    User->>Host: 1. Launch run_host.bat
-    Host-->>Host: Starts TLS 1.3 server & displays IP
-    User->>Client: 2. Launch run_client.bat
-    Client->>LAN: Broadcasts UDP Discovery (Port 53891)
-    Host-->>Client: Discovery Response with Fingerprint
-    Client->>Host: Pairing Request
-    Host-->>User: Displays 6-digit confirmation code
-    User->>Client: 3. Confirm 6-digit code
-    Client->>Host: TLS 1.3 Mutual Authentication
-    Host-->>Client: 60 FPS Video Stream (Port 53893)
-    Client-->>User: Fullscreen Extended Display (Press F11)
-```
-
-- Declarative D2 Source: [`docs/quickstart.d2`](docs/quickstart.d2)
-</details>
+<p align="center">
+  <sub>Source model: <a href="docs/quickstart.d2"><code>docs/quickstart.d2</code></a> • Vector asset: <a href="docs/images/quickstart.svg"><code>docs/images/quickstart.svg</code></a></sub>
+</p>
 
 1. **On your Primary PC (Host)**:
    - Double-click [`run_host.bat`](run_host.bat).
@@ -121,55 +97,9 @@ sequenceDiagram
 <p align="center">
   <img src="docs/images/architecture.svg" alt="Twin Desk Subsystem Architecture Diagram" width="100%" />
 </p>
-
-<details>
-<summary><b>View Raw Diagram Specification (Mermaid &amp; D2)</b></summary>
-
-```mermaid
-graph LR
-    subgraph Host["🖥️ PRIMARY PC (Host)"]
-        OS["Windows Desktop Manager<br/>(DWM / Display Settings)"]
-        IDD["Native IddCx Driver<br/>(Virtual Display)"]
-        DXGI["DXGI / GDI Capture<br/>(IDXGIOutputDuplication)"]
-        ENC["Hardware Video Encoder<br/>(NVENC / QSV / AMF)"]
-        INJ["Input Injector & Sanitizer<br/>(Win32 SetCursorPos / Touch)"]
-        H_NET["TLS 1.3 Transport Server<br/>(Ports 53892 & 53893)"]
-
-        OS --> IDD
-        IDD --> DXGI
-        DXGI --> ENC
-        ENC --> H_NET
-        H_NET --> INJ
-        INJ --> OS
-    end
-
-    subgraph Network["🔒 Encrypted Local Network (LAN)"]
-        CTRL["TLS 1.3 Control Channel (TCP 53892)<br/>Input, Pairing, File Transfer"]
-        STREAM["TLS 1.3 Video Stream (TCP 53893)<br/>H.264 / JPEG Length-Prefixed Frames"]
-        BEACON["UDP Beacon (Port 53891)<br/>Peer Presence Discovery"]
-    end
-
-    subgraph Client["💻 SECOND LAPTOP (Client / Receiver)"]
-        C_NET["TLS 1.3 Client Engine"]
-        DEC["Video Decoder<br/>(H.264 NAL / JPEG)"]
-        VIEW["PySide6 Render Viewport<br/>(StreamViewerWidget / Fullscreen)"]
-        IN_CAP["Input & Gesture Capture<br/>(Mouse, Keys, Touch Panning)"]
-        ESC["Emergency Escape Monitor<br/>(Ctrl+Alt+Shift+Esc)"]
-
-        C_NET --> DEC
-        DEC --> VIEW
-        VIEW --> IN_CAP
-        IN_CAP --> ESC
-        ESC --> C_NET
-    end
-
-    H_NET <--> CTRL <--> C_NET
-    H_NET --> STREAM --> C_NET
-    H_NET <.- BEACON .-> C_NET
-```
-
-- Declarative D2 Source: [`docs/architecture.d2`](docs/architecture.d2)
-</details>
+<p align="center">
+  <sub>Interactive editor: <a href="docs/architecture.drawio"><code>docs/architecture.drawio</code></a> • Declarative D2 source: <a href="docs/architecture.d2"><code>docs/architecture.d2</code></a> • Vector asset: <a href="docs/images/architecture.svg"><code>docs/images/architecture.svg</code></a></sub>
+</p>
 
 ---
 
